@@ -1,0 +1,150 @@
+﻿version: '3.8'
+
+# Variables de entorno para producción (definir en .env.production)
+# DB_PASSWORD, DB_DATABASE, APP_KEY, etc.
+
+services:
+  # MySQL Database (igual que desarrollo pero con configuraciones de producción)
+  mysql:
+    image: mysql:8.0
+    container_name: plataforma_mysql_prod
+    restart: unless-stopped
+    # Exponer solo internamente, no publicar puerto en host
+    # ports:
+    #   - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 
+      MYSQL_DATABASE: 
+      MYSQL_USER: laravel
+      MYSQL_PASSWORD: 
+    volumes:
+      - mysql_data_prod:/var/lib/mysql
+      - ./docker/mysql/conf.d:/etc/mysql/conf.d:ro
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "-p"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - plataforma_network_prod
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Configuración de producción: performance tuning
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # Laravel Backend API con PHP-FPM + Nginx (etapa production del Dockerfile)
+  backend:
+    build:
+      context: ./backend_api
+      dockerfile: Dockerfile
+      target: production
+    container_name: plataforma_backend_prod
+    restart: unless-stopped
+    # No exponer puerto, solo accesible a través de nginx (si se usa) o frontend
+    # ports:
+    #   - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_URL=
+      - FRONTEND_URL=
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=
+      - DB_USERNAME=laravel
+      - DB_PASSWORD=
+      - APP_KEY=
+      - JWT_SECRET=
+      - SANCTUM_STATEFUL_DOMAINS=
+      - SESSION_DRIVER=cookie
+      - SESSION_SECURE_COOKIE=true
+      - LOG_CHANNEL=stack
+      - LOG_LEVEL=warning
+    # Volúmenes solo para logs y storage persistente
+    volumes:
+      - backend_storage_prod:/var/www/html/storage
+      - backend_logs_prod:/var/www/html/storage/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - plataforma_network_prod
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Comando de producción: solo servir con PHP-FPM (supervisord ya configurado)
+    command: supervisord -c /var/www/html/.docker/supervisord.conf
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  # Nginx como proxy reverso para backend y servidor de archivos estáticos del frontend
+  nginx:
+    image: nginx:alpine
+    container_name: plataforma_nginx_prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/prod.conf:/etc/nginx/nginx.conf:ro
+      # El frontend se sirve desde un directorio externo; montar en runtime
+      # - /path/to/frontend/dist:/usr/share/nginx/html:ro
+      - backend_storage_prod:/var/www/html/storage:ro
+      - ssl_certs:/etc/ssl/certs:ro
+      - ssl_private:/etc/ssl/private:ro
+    depends_on:
+      - backend
+    networks:
+      - plataforma_network_prod
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  plataforma_network_prod:
+    driver: bridge
+
+volumes:
+  mysql_data_prod:
+    driver: local
+  backend_storage_prod:
+    driver: local
+  backend_logs_prod:
+    driver: local
+  ssl_certs:
+    driver: local
+  ssl_private:
+    driver: local

@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  app:
+    image: php:8.3-cli
+    container_name: api_backend
+    working_dir: /var/www/html
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_CONNECTION=mysql
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_DATABASE=plataforma_v2
+      - DB_USERNAME=root
+      - DB_PASSWORD=root
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      bash -c "
+      apt-get update && apt-get install -y unzip libzip-dev libpng-dev libonig-dev libxml2-dev git &&
+      docker-php-ext-install pdo pdo_mysql zip gd &&
+      curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer &&
+      composer install --no-interaction &&
+      if [ ! -f .env ]; then cp .env.example .env; fi &&
+      php artisan key:generate --force &&
+      php artisan migrate:fresh --seed --force &&
+      php artisan serve --host=0.0.0.0 --port=8000"
+
+  db:
+    image: mysql:8.0
+    container_name: api_db
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: plataforma_v2
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:

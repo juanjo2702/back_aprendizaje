@@ -1,0 +1,94 @@
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\Question;
+use App\Models\Quiz;
+use Illuminate\Database\Seeder;
+
+class QuestionSeeder extends Seeder
+{
+    public function run(): void
+    {
+        // Usar chunking para evitar problemas de memoria
+        Quiz::chunk(50, function ($quizzes) {
+            foreach ($quizzes as $quiz) {
+                $questionCount = rand(5, 10); // Reducir de 5-15 a 5-10 para menos preguntas
+                $questions = [];
+
+                for ($i = 1; $i <= $questionCount; $i++) {
+                    $type = fake()->randomElement(['multiple_choice', 'true_false', 'short_answer']);
+                    $questionData = $this->generateQuestion($type, $i);
+
+                    $questions[] = [
+                        'quiz_id' => $quiz->id,
+                        'question' => $questionData['text'],
+                        'type' => $type,
+                        'options' => isset($questionData['options']) ? json_encode($questionData['options']) : null,
+                        'correct_answer' => $questionData['correct_answer'],
+                        'points' => rand(1, 3),
+                        'sort_order' => $i,
+                        'explanation' => null,
+                    ];
+                }
+
+                // Insertar en chunks pequeños
+                if (! empty($questions)) {
+                    Question::insert($questions);
+                }
+            }
+        });
+    }
+
+    private function generateQuestion(string $type, int $index): array
+    {
+        $techTopics = ['Laravel', 'Vue.js', 'PHP', 'JavaScript', 'HTML', 'CSS', 'MySQL', 'API', 'Git', 'Docker'];
+        $designTopics = ['UX', 'UI', 'Figma', 'Prototipado', 'Wireframe', 'Color Theory', 'Typography'];
+        $businessTopics = ['Marketing', 'Ventas', 'Finanzas', 'Emprendimiento', 'Gestión de Proyectos'];
+
+        $topics = array_merge($techTopics, $designTopics, $businessTopics);
+        $topic = $topics[array_rand($topics)];
+
+        switch ($type) {
+            case 'multiple_choice':
+                $options = [
+                    fake()->sentence(),
+                    fake()->sentence(),
+                    fake()->sentence(),
+                    fake()->sentence(),
+                ];
+                $correctIndex = rand(0, 3);
+                $correctAnswer = $options[$correctIndex];
+                shuffle($options);
+
+                return [
+                    'text' => "¿Cuál de las siguientes afirmaciones sobre $topic es correcta?",
+                    'options' => $options,
+                    'correct_answer' => $correctAnswer,
+                ];
+
+            case 'true_false':
+                $correctAnswer = fake()->randomElement(['Verdadero', 'Falso']);
+
+                return [
+                    'text' => fake()->sentence().' (Verdadero o Falso)',
+                    'correct_answer' => $correctAnswer,
+                ];
+
+            case 'short_answer':
+                $answers = ['Laravel', 'Vue.js', 'PHP', 'JavaScript', 'HTML', 'CSS'];
+                $correctAnswer = $answers[array_rand($answers)];
+
+                return [
+                    'text' => "¿Qué tecnología se utiliza principalmente para $topic?",
+                    'correct_answer' => $correctAnswer,
+                ];
+
+            default:
+                return [
+                    'text' => "Pregunta $index sobre $topic",
+                    'correct_answer' => 'Respuesta correcta',
+                ];
+        }
+    }
+}

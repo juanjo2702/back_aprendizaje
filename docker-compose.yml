@@ -1,0 +1,74 @@
+﻿version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: plataforma_mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 
+      MYSQL_DATABASE: 
+      MYSQL_USER: laravel
+      MYSQL_PASSWORD: secret
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/conf.d:/etc/mysql/conf.d:ro
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "-p"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - plataforma_network
+
+  # Laravel Backend API
+  backend:
+    build:
+      context: ./backend_api
+      dockerfile: Dockerfile
+      target: development
+    container_name: plataforma_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=
+      - APP_DEBUG=
+      - APP_URL=
+      - FRONTEND_URL=
+      - SANCTUM_STATEFUL_DOMAINS=
+      - APP_KEY=
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=
+      - DB_USERNAME=laravel
+      - DB_PASSWORD=secret
+    volumes:
+      - ./backend_api:/var/www/html
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - plataforma_network
+    command: >
+      sh -c "
+      if [ ! -f .env ]; then
+        cp .env.example .env &&
+        php artisan key:generate --force;
+      fi &&
+      php -d memory_limit=512M artisan migrate:fresh --force &&
+      php -d memory_limit=512M artisan db:seed --force || echo 'Seeders fallaron, continuando...' &&
+      php artisan serve --host=0.0.0.0 --port=8000"
+
+networks:
+  plataforma_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local

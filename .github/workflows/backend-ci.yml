@@ -1,0 +1,87 @@
+﻿name: Backend CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - './**'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - './**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: plataforma_v2_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_mysql, bcmath, gd, zip
+          coverage: none
+
+      - name: Copy environment file
+        run: cp ./.env.example ./.env
+        working-directory: .
+
+      - name: Set Laravel application key
+        run: php artisan key:generate
+        working-directory: .
+        env:
+          APP_ENV: testing
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+        working-directory: .
+
+      - name: Run database migrations
+        run: php artisan migrate --force
+        working-directory: .
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: plataforma_v2_test
+          DB_USERNAME: root
+          DB_PASSWORD: root
+          APP_CIPHER: aes-256-cbc
+
+      - name: Run tests
+        run: composer test
+        working-directory: .
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: plataforma_v2_test
+          DB_USERNAME: root
+          DB_PASSWORD: root
+          APP_ENV: testing
+          APP_CIPHER: aes-256-cbc
+
+      - name: Run linting
+        run: composer lint
+        working-directory: .
+
+      - name: Run static analysis
+        run: composer analyse
+        working-directory: .
