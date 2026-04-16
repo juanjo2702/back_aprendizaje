@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'instructor' => \App\Http\Middleware\InstructorMiddleware::class,
+            'role' => \App\Http\Middleware\RoleMiddleware::class,
         ]);
 
         // Configure CORS

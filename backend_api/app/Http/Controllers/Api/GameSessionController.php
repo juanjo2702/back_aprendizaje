@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\GameConfiguration;
 use App\Models\GameSession;
 use App\Models\User;
+use App\Services\CourseProgressService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -95,6 +96,7 @@ class GameSessionController extends Controller
     public function update(Request $request, GameSession $gameSession)
     {
         $user = Auth::user();
+        $progressService = app(CourseProgressService::class);
 
         // Verificar que la sesión pertenezca al usuario
         if ($gameSession->user_id !== $user->id) {
@@ -114,7 +116,7 @@ class GameSessionController extends Controller
             'details' => 'nullable|array',
         ]);
 
-        DB::transaction(function () use ($gameSession, $validated, $user) {
+        DB::transaction(function () use ($gameSession, $validated, $user, $progressService) {
             // Actualizar sesión
             $gameSession->update([
                 'score' => $validated['score'],
@@ -124,34 +126,61 @@ class GameSessionController extends Controller
                 'completed_at' => Carbon::now(),
             ]);
 
-            // Calcular puntos ganados (proporcionales al puntaje)
-            $maxScore = $gameSession->gameConfiguration->max_score;
-            $scorePercentage = ($validated['score'] / $maxScore) * 100;
+            $gameSession->loadMissing(['course', 'lesson', 'gameConfiguration.lesson']);
+            $course = $gameSession->course ?: $gameSession->gameConfiguration?->course;
+            $lesson = $gameSession->lesson ?: $gameSession->gameConfiguration?->lesson;
 
-            // Base points: 10% del puntaje máximo
-            $basePoints = intval($maxScore * 0.1);
-            // Bonus por puntaje alto
-            $bonusPoints = $scorePercentage >= 90 ? 50 : ($scorePercentage >= 70 ? 25 : 0);
+            if ($lesson) {
+                $progressService->markLessonCompleted($user, $lesson, (int) $validated['time_spent']);
+            }
 
-            $totalPoints = $basePoints + $bonusPoints;
+            $gamificationEnabled = $course ? $progressService->courseHasInteractiveActivities($course) : false;
+            $totalPoints = 0;
 
-            // Actualizar puntos del usuario
-            $user->total_points += $totalPoints;
-            $user->save();
+            if ($gamificationEnabled) {
+                // Calcular puntos ganados (proporcionales al puntaje)
+                $maxScore = max(1, (int) $gameSession->gameConfiguration->max_score);
+                $scorePercentage = ($validated['score'] / $maxScore) * 100;
 
-            // Registrar en el log de puntos
-            DB::table('points_log')->insert([
-                'user_id' => $user->id,
-                'points' => $totalPoints,
-                'source' => 'game_session',
-                'source_id' => $gameSession->id,
-                'description' => 'Puntos por completar juego: '.$gameSession->gameConfiguration->title,
-                'created_at' => Carbon::now(),
-                'updated_at' => Carbon::now(),
-            ]);
+                // Base points: 10% del puntaje máximo
+                $basePoints = intval($maxScore * 0.1);
+                // Bonus por puntaje alto
+                $bonusPoints = $scorePercentage >= 90 ? 50 : ($scorePercentage >= 70 ? 25 : 0);
+                $totalPoints = $basePoints + $bonusPoints;
 
-            // Verificar si se ganó algún badge
-            $this->checkForBadges($user, $gameSession);
+                // Actualizar puntos del usuario
+                $user->total_points += $totalPoints;
+                $user->save();
+
+                DB::table('points_log')->insert([
+                    'user_id' => $user->id,
+                    'points' => $totalPoints,
+                    'source' => 'game_session',
+                    'source_id' => $gameSession->id,
+                    'description' => 'Puntos por completar juego: '.$gameSession->gameConfiguration->title,
+                    'created_at' => Carbon::now(),
+                    'updated_at' => Carbon::now(),
+                ]);
+
+                // Verificar si se ganó algún badge
+                $this->checkForBadges($user, $gameSession);
+            }
+
+            if ($gamificationEnabled && $lesson) {
+                $progressService->recordInteractiveCompletion(
+                    $user,
+                    $lesson,
+                    'game_session',
+                    (int) $gameSession->id,
+                    (float) $validated['score'],
+                    (float) $gameSession->gameConfiguration->max_score,
+                    $totalPoints
+                );
+            }
+
+            if ($course) {
+                $progressService->recalculateEnrollmentProgress($user, $course);
+            }
         });
 
         return response()->json($gameSession->fresh()->load([

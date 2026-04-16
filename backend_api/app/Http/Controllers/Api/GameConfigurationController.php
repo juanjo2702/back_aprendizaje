@@ -16,8 +16,14 @@ class GameConfigurationController extends Controller
      */
     public function index(Request $request)
     {
+        $user = $request->user();
+
         $query = GameConfiguration::where('is_active', true)
             ->with('gameType:id,name,slug,default_config');
+
+        if ($user && ! $user->isAdmin()) {
+            $query->whereHas('course', fn ($courseQuery) => $courseQuery->where('instructor_id', $user->id));
+        }
 
         // Filtrar por curso
         if ($request->filled('course_id')) {
@@ -118,12 +124,24 @@ class GameConfigurationController extends Controller
 
         $validated = $request->validate([
             'title' => 'sometimes|string|max:255',
+            'game_type_id' => 'sometimes|exists:game_types,id',
+            'module_id' => 'nullable|exists:modules,id',
+            'lesson_id' => 'nullable|exists:lessons,id',
             'config' => 'nullable|array',
             'max_score' => 'sometimes|integer|min:1|max:10000',
             'time_limit' => 'nullable|integer|min:1',
             'max_attempts' => 'nullable|integer|min:1',
             'is_active' => 'sometimes|boolean',
         ]);
+
+        if (($validated['lesson_id'] ?? null) && ($validated['module_id'] ?? null)) {
+            $lesson = Lesson::findOrFail($validated['lesson_id']);
+            if ((int) $lesson->module_id !== (int) $validated['module_id']) {
+                return response()->json([
+                    'message' => 'La lección no pertenece al módulo especificado.',
+                ], 422);
+            }
+        }
 
         $gameConfiguration->update($validated);
 

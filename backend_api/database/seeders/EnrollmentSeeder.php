@@ -14,18 +14,19 @@ class EnrollmentSeeder extends Seeder
         $students = User::where('role', 'student')->get();
         $courses = Course::where('status', 'published')->get();
 
-        // Inscripciones para el estudiante de demostración
+        // Inscripciones para el estudiante de demostración:
+        // se inscribe a todos los cursos publicados para poder probar
+        // la vista final sin pasar por checkout en cada curso.
         $demoStudent = User::where('email', 'estudiante@plataforma.com')->first();
         if ($demoStudent) {
-            $demoCourses = $courses->take(3);
-            foreach ($demoCourses as $course) {
+            foreach ($courses as $course) {
                 Enrollment::updateOrCreate(
                     [
                         'user_id' => $demoStudent->id,
                         'course_id' => $course->id,
                     ],
                     [
-                        'progress' => rand(0, 100),
+                        'progress' => rand(10, 95),
                         'enrolled_at' => now()->subDays(rand(1, 30)),
                     ]
                 );

@@ -7,8 +7,11 @@ use App\Models\Certificate;
 use App\Models\Course;
 use App\Models\Enrollment;
 use App\Models\GameSession;
+use App\Models\InteractiveActivityResult;
 use App\Models\User;
+use App\Models\UserLessonProgress;
 use App\Models\UserQuizAttempt;
+use App\Services\CourseProgressService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -167,7 +170,7 @@ class UserProgressController extends Controller
     /**
      * Obtener progreso detallado de un curso específico.
      */
-    public function courseProgress(Request $request, Course $course)
+    public function courseProgress(Request $request, Course $course, CourseProgressService $progressService)
     {
         $user = Auth::user();
 
@@ -176,14 +179,17 @@ class UserProgressController extends Controller
             ->where('course_id', $course->id)
             ->firstOrFail();
 
-        // Cargar módulos y lecciones con progreso
+        $progressSnapshot = $progressService->recalculateEnrollmentProgress($user, $course);
+
+        // Cargar módulos y lecciones
         $course->load([
             'modules' => function ($query) {
                 $query->with([
                     'lessons' => function ($q) {
-                        $q->with(['gameConfiguration', 'quiz']);
+                        $q->with(['interactiveConfig', 'gameConfiguration', 'quiz'])->orderBy('sort_order');
                     },
                 ]);
+                $query->orderBy('sort_order');
             },
             'quizzes' => function ($query) use ($user) {
                 $query->withCount(['attempts' => function ($q) use ($user) {
@@ -192,25 +198,46 @@ class UserProgressController extends Controller
             },
         ]);
 
+        $completedLessonIds = UserLessonProgress::where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('is_completed', true)
+            ->pluck('lesson_id')
+            ->all();
+
+        $completedInteractiveIds = InteractiveActivityResult::where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('status', 'completed')
+            ->pluck('lesson_id')
+            ->unique()
+            ->all();
+
         // Calcular progreso por módulo
         $modulesProgress = [];
         $totalLessons = 0;
-        $completedLessons = 0;
+        $completedLessonsCount = 0;
 
         foreach ($course->modules as $module) {
             $moduleLessons = $module->lessons->count();
-            $completedModuleLessons = 0; // Aquí iría la lógica para verificar lecciones completadas
+            $moduleLessonIds = $module->lessons->pluck('id')->all();
+            $completedModuleLessons = count(array_intersect($moduleLessonIds, $completedLessonIds));
+            $interactiveLessonIds = $module->lessons
+                ->filter(fn ($lesson) => in_array($lesson->normalized_type, ['interactive', 'game', 'quiz'], true))
+                ->pluck('id')
+                ->all();
+            $completedInteractiveByModule = count(array_intersect($interactiveLessonIds, $completedInteractiveIds));
 
             $modulesProgress[] = [
                 'module_id' => $module->id,
                 'title' => $module->title,
                 'total_lessons' => $moduleLessons,
                 'completed_lessons' => $completedModuleLessons,
+                'interactive_total' => count($interactiveLessonIds),
+                'interactive_completed' => $completedInteractiveByModule,
                 'progress' => $moduleLessons > 0 ? round(($completedModuleLessons / $moduleLessons) * 100) : 0,
             ];
 
             $totalLessons += $moduleLessons;
-            $completedLessons += $completedModuleLessons;
+            $completedLessonsCount += $completedModuleLessons;
         }
 
         // Intentos de quiz en este curso
@@ -258,8 +285,10 @@ class UserProgressController extends Controller
             'modules_progress' => $modulesProgress,
             'overall_progress' => [
                 'total_lessons' => $totalLessons,
-                'completed_lessons' => $completedLessons,
-                'percentage' => $totalLessons > 0 ? round(($completedLessons / $totalLessons) * 100) : 0,
+                'completed_lessons' => $completedLessonsCount,
+                'percentage' => $progressSnapshot['overall_progress'],
+                'lessons_percentage' => $progressSnapshot['lessons']['progress'],
+                'interactive_percentage' => $progressSnapshot['interactive']['progress'],
             ],
             'quizzes' => [
                 'total' => $course->quizzes->count(),
@@ -270,6 +299,13 @@ class UserProgressController extends Controller
                 'sessions' => $gameSessions,
                 'total_completed' => $gameSessions->count(),
                 'average_score' => $gameSessions->avg('score') ?? 0,
+            ],
+            'gamification' => [
+                'enabled' => $progressSnapshot['has_interactive_activities'],
+                'show_achievements_tab' => $progressSnapshot['has_interactive_activities'],
+                'leaderboard' => $progressSnapshot['has_interactive_activities']
+                    ? $progressService->getCourseLeaderboard($course, 10)
+                    : [],
             ],
             'certificate' => [
                 'available' => $course->has_certificate,
@@ -302,7 +338,11 @@ class UserProgressController extends Controller
                     'title' => $session->gameConfiguration->title,
                     'score' => $session->score,
                     'max_score' => $session->gameConfiguration->max_score,
-                    'course' => $session->course ? ['title' => $session->course->title] : null,
+                    'time_spent' => $session->time_spent,
+                    'course' => $session->course ? [
+                        'id' => $session->course->id,
+                        'title' => $session->course->title,
+                    ] : null,
                     'date' => $session->completed_at,
                     'icon' => 'mdi-gamepad-variant',
                     'color' => 'purple',
@@ -321,10 +361,15 @@ class UserProgressController extends Controller
                     'id' => $attempt->id,
                     'type' => 'quiz',
                     'title' => $attempt->quiz->title,
-                    'score_percentage' => $attempt->percentage,
+                    'score' => $attempt->percentage,
+                    'percentage' => $attempt->percentage,
                     'correct_answers' => $attempt->correct_answers,
                     'total_questions' => $attempt->total_questions,
-                    'course' => $attempt->course ? ['title' => $attempt->course->title] : null,
+                    'time_spent' => $attempt->time_spent,
+                    'course' => $attempt->course ? [
+                        'id' => $attempt->course->id,
+                        'title' => $attempt->course->title,
+                    ] : null,
                     'date' => $attempt->completed_at,
                     'icon' => 'mdi-format-list-checks',
                     'color' => 'blue',
@@ -343,7 +388,10 @@ class UserProgressController extends Controller
                     'type' => 'certificate',
                     'title' => 'Certificado obtenido: '.$cert->course->title,
                     'certificate_code' => $cert->certificate_code,
-                    'course' => ['title' => $cert->course->title],
+                    'course' => [
+                        'id' => $cert->course->id,
+                        'title' => $cert->course->title,
+                    ],
                     'date' => $cert->issued_at,
                     'icon' => 'mdi-certificate',
                     'color' => 'green',

@@ -30,6 +30,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'provider_token',
     ];
 
     protected function casts(): array
@@ -83,6 +84,16 @@ class User extends Authenticatable
     public function certificates()
     {
         return $this->hasMany(Certificate::class);
+    }
+
+    public function lessonProgress()
+    {
+        return $this->hasMany(UserLessonProgress::class);
+    }
+
+    public function interactiveActivityResults()
+    {
+        return $this->hasMany(InteractiveActivityResult::class);
     }
 
     // ─── Helpers ─────────────────────────────────────────────

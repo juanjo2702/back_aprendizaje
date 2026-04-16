@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 class Lesson extends Model
 {
@@ -20,6 +21,8 @@ class Lesson extends Model
         'is_free',
         'game_config_id',
         'quiz_id',
+        'contentable_type',
+        'contentable_id',
     ];
 
     protected function casts(): array
@@ -49,6 +52,41 @@ class Lesson extends Model
         );
     }
 
+    public function contentable(): MorphTo
+    {
+        return $this->morphTo();
+    }
+
+    public function videoContent()
+    {
+        return $this->hasOne(LessonVideo::class);
+    }
+
+    public function readingContent()
+    {
+        return $this->hasOne(LessonReading::class);
+    }
+
+    public function resourceContent()
+    {
+        return $this->hasOne(LessonResource::class);
+    }
+
+    public function interactiveConfig()
+    {
+        return $this->hasOne(InteractiveConfig::class);
+    }
+
+    public function userProgress()
+    {
+        return $this->hasMany(UserLessonProgress::class);
+    }
+
+    public function interactiveResults()
+    {
+        return $this->hasMany(InteractiveActivityResult::class);
+    }
+
     public function gameConfiguration()
     {
         return $this->belongsTo(GameConfiguration::class, 'game_config_id');
@@ -57,5 +95,26 @@ class Lesson extends Model
     public function quiz()
     {
         return $this->belongsTo(Quiz::class);
+    }
+
+    // ─── Domain Helpers ─────────────────────────────────────
+
+    public function getNormalizedTypeAttribute(): string
+    {
+        return match ($this->type) {
+            'text' => 'reading',
+            'game', 'quiz' => 'interactive',
+            default => $this->type,
+        };
+    }
+
+    public function isInteractive(): bool
+    {
+        return in_array($this->normalized_type, ['interactive', 'game', 'quiz'], true);
+    }
+
+    public function resolvesTo(string $modelClass): bool
+    {
+        return $this->contentable_type === $modelClass;
     }
 }

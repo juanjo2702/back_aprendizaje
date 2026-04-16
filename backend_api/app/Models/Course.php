@@ -84,6 +84,21 @@ class Course extends Model
         return $this->hasMany(Quiz::class);
     }
 
+    public function interactiveConfigs()
+    {
+        return $this->hasMany(InteractiveConfig::class);
+    }
+
+    public function interactiveActivityResults()
+    {
+        return $this->hasMany(InteractiveActivityResult::class);
+    }
+
+    public function lessonProgress()
+    {
+        return $this->hasMany(UserLessonProgress::class);
+    }
+
     public function certificates()
     {
         return $this->hasMany(Certificate::class);
@@ -111,5 +126,12 @@ class Course extends Model
     public function getTotalStudentsAttribute(): int
     {
         return $this->enrollments()->count();
+    }
+
+    public function hasInteractiveActivities(): bool
+    {
+        return $this->lessons()
+            ->whereIn('type', ['interactive', 'game', 'quiz'])
+            ->exists();
     }
 }

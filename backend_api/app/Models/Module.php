@@ -12,6 +12,7 @@ class Module extends Model
     protected $fillable = [
         'course_id',
         'title',
+        'description',
         'sort_order',
     ];
 

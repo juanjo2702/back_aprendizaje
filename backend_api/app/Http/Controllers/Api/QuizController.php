@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Lesson;
 use App\Models\Question;
 use App\Models\Quiz;
 use App\Models\UserAnswer;
 use App\Models\UserQuizAttempt;
+use App\Services\CourseProgressService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -130,6 +132,7 @@ class QuizController extends Controller
     public function submitAttempt(Request $request, UserQuizAttempt $attempt)
     {
         $user = Auth::user();
+        $progressService = app(CourseProgressService::class);
 
         // Verificar que el intento pertenezca al usuario
         if ($attempt->user_id !== $user->id) {
@@ -150,8 +153,9 @@ class QuizController extends Controller
             'time_spent' => 'required|integer|min:1',
         ]);
 
-        DB::transaction(function () use ($attempt, $validated, $user) {
+        DB::transaction(function () use ($attempt, $validated, $user, $progressService) {
             $quiz = $attempt->quiz;
+            $quiz->loadMissing(['course', 'lesson']);
             $questions = $quiz->questions()->get()->keyBy('id');
 
             $totalScore = 0;
@@ -202,25 +206,51 @@ class QuizController extends Controller
                 'completed_at' => Carbon::now(),
             ]);
 
-            // Otorgar puntos por completar quiz
-            $quizPoints = intval($totalScore * 0.5); // 50% del puntaje como puntos
-            if ($quizPoints > 0) {
-                $user->total_points += $quizPoints;
-                $user->save();
+            $quizCourse = $quiz->course;
+            $quizLesson = $quiz->lesson ?: Lesson::where('quiz_id', $quiz->id)->first();
+            $gamificationEnabled = $quizCourse ? $progressService->courseHasInteractiveActivities($quizCourse) : false;
+            $quizPoints = 0;
 
-                DB::table('points_log')->insert([
-                    'user_id' => $user->id,
-                    'points' => $quizPoints,
-                    'source' => 'quiz_attempt',
-                    'source_id' => $attempt->id,
-                    'description' => 'Puntos por completar quiz: '.$quiz->title,
-                    'created_at' => Carbon::now(),
-                    'updated_at' => Carbon::now(),
-                ]);
+            if ($gamificationEnabled) {
+                // Otorgar puntos por completar quiz
+                $quizPoints = intval($totalScore * 0.5); // 50% del puntaje como puntos
+                if ($quizPoints > 0) {
+                    $user->total_points += $quizPoints;
+                    $user->save();
+
+                    DB::table('points_log')->insert([
+                        'user_id' => $user->id,
+                        'points' => $quizPoints,
+                        'source' => 'quiz_attempt',
+                        'source_id' => $attempt->id,
+                        'description' => 'Puntos por completar quiz: '.$quiz->title,
+                        'created_at' => Carbon::now(),
+                        'updated_at' => Carbon::now(),
+                    ]);
+                }
+
+                if ($quizLesson) {
+                    $progressService->markLessonCompleted($user, $quizLesson, (int) $validated['time_spent']);
+                    $progressService->recordInteractiveCompletion(
+                        $user,
+                        $quizLesson,
+                        'quiz_attempt',
+                        (int) $attempt->id,
+                        (float) $totalScore,
+                        (float) max(1, $questions->sum('points')),
+                        $quizPoints
+                    );
+                }
+
+                (new \App\Services\BadgeService)->checkQuizBadges($user, $attempt);
+            }
+
+            if ($quizCourse) {
+                $progressService->recalculateEnrollmentProgress($user, $quizCourse);
             }
 
             // Verificar si se otorga certificado (si el quiz está asociado a un curso con certificado)
-            if ($quiz->course->has_certificate && $percentage >= $quiz->course->certificate_min_score) {
+            if ($quizCourse && $quizCourse->has_certificate && $percentage >= $quizCourse->certificate_min_score) {
                 // Lógica para otorgar certificado (se implementará en CertificateController)
                 // Por ahora solo registramos en logs
                 \Log::info("Usuario {$user->id} califica para certificado en curso {$quiz->course_id}");

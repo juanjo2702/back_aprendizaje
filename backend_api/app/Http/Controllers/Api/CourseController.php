@@ -14,9 +14,17 @@ class CourseController extends Controller
      */
     public function catalog(Request $request)
     {
+        $user = auth('sanctum')->user();
+
         $query = Course::published()
             ->with(['instructor:id,name,avatar', 'category:id,name,slug'])
             ->withCount('enrollments as total_students');
+
+        if ($user) {
+            $query->withExists([
+                'enrollments as is_enrolled' => fn ($q) => $q->where('user_id', $user->id),
+            ]);
+        }
 
         // Filter by category
         if ($request->filled('category')) {
@@ -62,19 +70,91 @@ class CourseController extends Controller
     /**
      * Show a single course with full details.
      */
-    public function show(string $slug)
+    public function show(Request $request, string $slug)
     {
-        $course = Course::where('slug', $slug)
-            ->published()
+        $user = auth('sanctum')->user();
+        $previewMode = $request->boolean('preview');
+
+        $query = Course::where('slug', $slug)
             ->with([
                 'instructor:id,name,avatar,bio',
                 'category:id,name,slug',
                 'modules.lessons:id,module_id,title,type,duration,sort_order,is_free',
             ])
-            ->withCount('enrollments as total_students')
-            ->firstOrFail();
+            ->withCount('enrollments as total_students');
+
+        if (! $previewMode) {
+            $query->published();
+        }
+
+        $course = $query->firstOrFail();
+
+        if ($previewMode && (! $user || (! $user->isAdmin() && (int) $course->instructor_id !== (int) $user->id))) {
+            abort(403, 'No tienes permiso para previsualizar este curso.');
+        }
+
+        $isEnrolled = false;
+        $canManageCourse = false;
+
+        if ($user) {
+            $isEnrolled = $course->enrollments()
+                ->where('user_id', $user->id)
+                ->exists();
+
+            $canManageCourse = $user->isAdmin() || (int) $course->instructor_id === (int) $user->id;
+        }
+
+        $hasInteractiveActivities = $course->lessons()
+            ->whereIn('type', ['interactive', 'game', 'quiz'])
+            ->exists();
+
+        $course->setAttribute('is_enrolled', $isEnrolled);
+        $course->setAttribute('can_manage_course', $canManageCourse);
+        $course->setAttribute('is_preview', $previewMode);
+        $course->setAttribute('has_interactive_activities', $hasInteractiveActivities);
+        $course->setAttribute('player_tabs', $hasInteractiveActivities
+            ? ['content', 'achievements_ranking']
+            : ['content']);
+
+        $course->modules->each(function ($module) {
+            $module->lessons->each(function ($lesson) {
+                $lesson->setAttribute('normalized_type', match ($lesson->type) {
+                    'text' => 'reading',
+                    'game', 'quiz' => 'interactive',
+                    default => $lesson->type,
+                });
+            });
+        });
 
         return response()->json($course);
+    }
+
+    /**
+     * List courses created by the authenticated instructor/admin.
+     */
+    public function mine(Request $request)
+    {
+        $user = $request->user();
+
+        if (! $user->isInstructor() && ! $user->isAdmin()) {
+            return response()->json([
+                'message' => 'Solo instructores o administradores pueden acceder a este recurso.',
+            ], 403);
+        }
+
+        $query = Course::query()
+            ->with(['category:id,name,slug'])
+            ->withCount(['enrollments as total_students', 'modules', 'lessons']);
+
+        if (! $user->isAdmin() || ! $request->boolean('all')) {
+            $query->where('instructor_id', $user->id);
+        }
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        return $query->latest()->paginate($request->get('per_page', 12));
     }
 
     /**
@@ -90,13 +170,16 @@ class CourseController extends Controller
             'category_id' => 'nullable|exists:categories,id',
             'level' => 'required|in:beginner,intermediate,advanced,all_levels',
             'language' => 'nullable|string|max:10',
+            'status' => 'sometimes|in:draft,pending,published,archived',
             'requirements' => 'nullable|array',
             'what_you_learn' => 'nullable|array',
+            'has_certificate' => 'sometimes|boolean',
+            'certificate_min_score' => 'nullable|integer|min:0|max:100',
         ]);
 
         $validated['slug'] = Str::slug($validated['title']).'-'.Str::random(5);
         $validated['instructor_id'] = $request->user()->id;
-        $validated['status'] = 'draft';
+        $validated['status'] = $validated['status'] ?? 'draft';
 
         $course = Course::create($validated);
 
@@ -121,6 +204,8 @@ class CourseController extends Controller
             'status' => 'sometimes|in:draft,pending,published,archived',
             'requirements' => 'nullable|array',
             'what_you_learn' => 'nullable|array',
+            'has_certificate' => 'sometimes|boolean',
+            'certificate_min_score' => 'nullable|integer|min:0|max:100',
         ]);
 
         $course->update($validated);
