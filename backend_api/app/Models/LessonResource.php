@@ -4,10 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\URL;
+use Spatie\MediaLibrary\HasMedia;
+use Spatie\MediaLibrary\InteractsWithMedia;
 
-class LessonResource extends Model
+class LessonResource extends Model implements HasMedia
 {
-    use HasFactory;
+    use HasFactory, InteractsWithMedia;
 
     protected $fillable = [
         'lesson_id',
@@ -33,5 +36,37 @@ class LessonResource extends Model
     {
         return $this->belongsTo(Lesson::class);
     }
-}
 
+    public function comments()
+    {
+        return $this->morphMany(Comment::class, 'commentable');
+    }
+
+    public function registerMediaCollections(): void
+    {
+        $this->addMediaCollection('lesson_resource')->singleFile();
+    }
+
+    public function latestResourceMedia()
+    {
+        return $this->getFirstMedia('lesson_resource');
+    }
+
+    public function signedDownloadUrl(int $minutes = 30): ?string
+    {
+        $media = $this->latestResourceMedia();
+
+        if (! $media) {
+            return $this->file_url;
+        }
+
+        return URL::temporarySignedRoute(
+            'protected-media.show',
+            now()->addMinutes($minutes),
+            [
+                'media' => $media->id,
+                'filename' => $media->file_name,
+            ]
+        );
+    }
+}

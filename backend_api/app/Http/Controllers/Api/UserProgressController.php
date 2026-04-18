@@ -8,6 +8,7 @@ use App\Models\Course;
 use App\Models\Enrollment;
 use App\Models\GameSession;
 use App\Models\InteractiveActivityResult;
+use App\Models\Purchase;
 use App\Models\User;
 use App\Models\UserLessonProgress;
 use App\Models\UserQuizAttempt;
@@ -26,7 +27,7 @@ class UserProgressController extends Controller
         $user = Auth::user();
 
         // Cursos del usuario
-        $enrollments = $user->enrollments()->with('course')->get();
+        $enrollments = $user->enrollments()->with(['course.instructor:id,name', 'course.category:id,name,slug'])->get();
         $totalCourses = $enrollments->count();
         $completedCourses = $enrollments->where('progress', '>=', 100)->count();
         $inProgressCourses = $enrollments->where('progress', '>', 0)->where('progress', '<', 100)->count();
@@ -58,6 +59,12 @@ class UserProgressController extends Controller
         $totalCertificates = $user->certificates()->count();
         $totalGamesCompleted = $user->gameSessions()->where('status', 'completed')->count();
         $totalQuizzesCompleted = $user->quizAttempts()->where('status', 'completed')->count();
+        $recentPurchases = Purchase::query()
+            ->where('user_id', $user->id)
+            ->with('shopItem:id,name,type')
+            ->latest('purchased_at')
+            ->limit(4)
+            ->get();
 
         return response()->json([
             'user' => [
@@ -66,8 +73,13 @@ class UserProgressController extends Controller
             ],
             'stats' => [
                 'total_points' => $user->total_points,
+                'current_level' => $user->current_level,
+                'level_title' => $user->level_title,
                 'current_streak' => $user->current_streak,
                 'last_active_at' => $user->last_active_at,
+                'earned_coins' => $user->earned_coins,
+                'spent_coins' => $user->spent_coins,
+                'available_coins' => $user->available_coins,
                 'points_this_month' => 0, // TODO: implementar con PointsLog
             ],
             'courses' => [
@@ -79,8 +91,14 @@ class UserProgressController extends Controller
                         'id' => $enrollment->id,
                         'progress' => $enrollment->progress,
                         'course' => [
+                            'id' => $enrollment->course->id,
                             'slug' => $enrollment->course->slug,
                             'title' => $enrollment->course->title,
+                            'category' => $enrollment->course->category ? [
+                                'id' => $enrollment->course->category->id,
+                                'name' => $enrollment->course->category->name,
+                                'slug' => $enrollment->course->category->slug,
+                            ] : null,
                             'instructor' => $enrollment->course->instructor ? ['name' => $enrollment->course->instructor->name] : null,
                         ],
                     ];
@@ -112,6 +130,18 @@ class UserProgressController extends Controller
                         'issued_at' => $cert->issued_at,
                     ];
                 })->toArray(),
+                'recent_purchases' => $recentPurchases->map(function (Purchase $purchase) {
+                    return [
+                        'id' => $purchase->id,
+                        'status' => $purchase->status,
+                        'cost_coins' => $purchase->cost_coins,
+                        'purchased_at' => $purchase->purchased_at,
+                        'shop_item' => $purchase->shopItem ? [
+                            'name' => $purchase->shopItem->name,
+                            'type' => $purchase->shopItem->type,
+                        ] : null,
+                    ];
+                })->toArray(),
             ],
             'achievements' => [
                 'total_badges' => $totalBadges,
@@ -131,8 +161,9 @@ class UserProgressController extends Controller
 
         $query = Enrollment::where('user_id', $user->id)
             ->with([
-                'course:id,title,slug,thumbnail,level,language,instructor_id',
+                'course:id,title,slug,thumbnail,level,language,instructor_id,category_id',
                 'course.instructor:id,name,avatar',
+                'course.category:id,name,slug',
             ]);
 
         // Filtrar por estado de progreso

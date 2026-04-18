@@ -27,6 +27,7 @@ class Course extends Model
         'what_you_learn',
         'has_certificate',
         'certificate_min_score',
+        'minimum_level_required',
     ];
 
     protected function casts(): array
@@ -37,6 +38,7 @@ class Course extends Model
             'what_you_learn' => 'array',
             'has_certificate' => 'boolean',
             'certificate_min_score' => 'integer',
+            'minimum_level_required' => 'integer',
         ];
     }
 
@@ -102,6 +104,11 @@ class Course extends Model
     public function certificates()
     {
         return $this->hasMany(Certificate::class);
+    }
+
+    public function shopItems()
+    {
+        return $this->hasMany(ShopItem::class);
     }
 
     // ─── Scopes ──────────────────────────────────────────────

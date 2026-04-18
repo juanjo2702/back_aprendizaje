@@ -10,7 +10,9 @@ use App\Models\LessonReading;
 use App\Models\LessonResource;
 use App\Models\LessonVideo;
 use App\Models\Module;
+use App\Services\TeacherMediaUploadService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class InstructorContentController extends Controller
 {
@@ -141,7 +143,13 @@ class InstructorContentController extends Controller
             'content_url' => 'nullable|string|max:2000',
             'content_text' => 'nullable|string',
             'provider' => 'nullable|string|max:100',
+            'video_upload_token' => 'nullable|string|max:100',
+            'resource_upload_token' => 'nullable|string|max:100',
             'activity_type' => 'nullable|string|max:100',
+            'max_attempts' => 'nullable|integer|min:1|max:20',
+            'passing_score' => 'nullable|integer|min:0|max:100',
+            'xp_reward' => 'nullable|integer|min:0|max:5000',
+            'coin_reward' => 'nullable|integer|min:0|max:5000',
             'interactive_config_payload' => 'nullable|array',
             'metadata' => 'nullable|array',
         ]);
@@ -152,25 +160,57 @@ class InstructorContentController extends Controller
         $type = $payload['type'];
         $title = $payload['title'] ?? $lesson->title;
         $metadata = $payload['metadata'] ?? null;
+        $uploadService = app(TeacherMediaUploadService::class);
 
         if ($type === 'video') {
+            $videoUploadToken = $payload['video_upload_token'] ?? null;
+            $videoProvider = $videoUploadToken ? 'local' : ($payload['provider'] ?? 'external');
+            $videoUrl = $payload['content_url'] ?? $lesson->content_url ?? 'https://example.com/video-demo';
             $video = LessonVideo::updateOrCreate(
                 ['lesson_id' => $lesson->id],
                 [
                     'title' => $title,
-                    'provider' => $payload['provider'] ?? 'external',
-                    'video_url' => $payload['content_url'] ?? $lesson->content_url,
-                    'embed_url' => $this->toEmbedUrl($payload['content_url'] ?? $lesson->content_url),
+                    'provider' => $videoProvider,
+                    'video_url' => $videoUrl,
+                    'embed_url' => $videoProvider === 'local' ? null : $this->toEmbedUrl($videoUrl),
                     'duration_seconds' => $payload['duration'] ?? $lesson->duration,
                     'metadata' => $metadata,
                 ]
             );
 
+            if ($videoUploadToken) {
+                $manifest = $uploadService->consumeUpload('video', $videoUploadToken);
+                $video->clearMediaCollection('lesson_video');
+                $video
+                    ->addMedia(Storage::disk('local')->path($manifest['path']))
+                    ->usingName($title)
+                    ->usingFileName($manifest['file_name'])
+                    ->withCustomProperties([
+                        'source' => 'teacher_chunk_upload',
+                        'mime_type' => $manifest['mime_type'],
+                        'size' => $manifest['size'],
+                    ])
+                    ->toMediaCollection('lesson_video', 'local');
+
+                $video->update([
+                    'provider' => 'local',
+                    'video_url' => $video->signedStreamUrl(),
+                    'embed_url' => null,
+                    'metadata' => array_merge($metadata ?? [], [
+                        'upload_token' => $videoUploadToken,
+                        'mime_type' => $manifest['mime_type'],
+                        'file_size_bytes' => $manifest['size'],
+                    ]),
+                ]);
+
+                $uploadService->cleanupUpload('video', $videoUploadToken);
+            }
+
             $lesson->update([
                 'type' => 'video',
                 'contentable_type' => LessonVideo::class,
                 'contentable_id' => $video->id,
-                'content_url' => $video->video_url,
+                'content_url' => $video->signedStreamUrl() ?? $video->video_url,
                 'content_text' => null,
             ]);
 
@@ -201,6 +241,7 @@ class InstructorContentController extends Controller
         }
 
         if ($type === 'resource') {
+            $resourceUploadToken = $payload['resource_upload_token'] ?? null;
             $resourceUrl = $payload['content_url'] ?? $lesson->content_url ?? 'https://example.com/recurso.pdf';
 
             $resource = LessonResource::updateOrCreate(
@@ -216,11 +257,40 @@ class InstructorContentController extends Controller
                 ]
             );
 
+            if ($resourceUploadToken) {
+                $manifest = $uploadService->consumeUpload('resource', $resourceUploadToken);
+                $resource->clearMediaCollection('lesson_resource');
+                $resource
+                    ->addMedia(Storage::disk('local')->path($manifest['path']))
+                    ->usingName($title)
+                    ->usingFileName($manifest['file_name'])
+                    ->withCustomProperties([
+                        'source' => 'teacher_chunk_upload',
+                        'mime_type' => $manifest['mime_type'],
+                        'size' => $manifest['size'],
+                    ])
+                    ->toMediaCollection('lesson_resource', 'local');
+
+                $resource->update([
+                    'file_name' => $manifest['file_name'],
+                    'file_url' => $resource->signedDownloadUrl(),
+                    'mime_type' => $manifest['mime_type'],
+                    'file_size_bytes' => $manifest['size'],
+                    'metadata' => array_merge($metadata ?? [], [
+                        'upload_token' => $resourceUploadToken,
+                        'mime_type' => $manifest['mime_type'],
+                        'file_size_bytes' => $manifest['size'],
+                    ]),
+                ]);
+
+                $uploadService->cleanupUpload('resource', $resourceUploadToken);
+            }
+
             $lesson->update([
                 'type' => 'resource',
                 'contentable_type' => LessonResource::class,
                 'contentable_id' => $resource->id,
-                'content_url' => $resource->file_url,
+                'content_url' => $resource->signedDownloadUrl() ?? $resource->file_url,
                 'content_text' => null,
             ]);
 
@@ -234,6 +304,10 @@ class InstructorContentController extends Controller
                 'module_id' => $lesson->module_id,
                 'authoring_mode' => 'form',
                 'activity_type' => $payload['activity_type'] ?? 'trivia',
+                'max_attempts' => $payload['max_attempts'] ?? 3,
+                'passing_score' => $payload['passing_score'] ?? 70,
+                'xp_reward' => $payload['xp_reward'] ?? 100,
+                'coin_reward' => $payload['coin_reward'] ?? 25,
                 'config_payload' => $payload['interactive_config_payload'] ?? $this->defaultInteractivePayload($title),
                 'assets_manifest' => $metadata,
                 'source_package_path' => null,

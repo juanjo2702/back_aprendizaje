@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class InteractiveActivityResult extends Model
+class ActivityLog extends Model
 {
     use HasFactory;
 
@@ -15,34 +15,27 @@ class InteractiveActivityResult extends Model
         'module_id',
         'lesson_id',
         'interactive_config_id',
-        'source_type',
-        'source_id',
+        'attempt_number',
         'score',
-        'max_score',
-        'attempts_used',
+        'passing_score',
         'xp_awarded',
         'coin_awarded',
-        'badges_awarded',
+        'reward_multiplier',
         'status',
-        'is_locked',
-        'requires_teacher_reset',
-        'completed_at',
-        'last_attempt_at',
+        'payload',
+        'attempted_at',
     ];
 
     protected function casts(): array
     {
         return [
-            'score' => 'decimal:2',
-            'max_score' => 'decimal:2',
-            'attempts_used' => 'integer',
+            'score' => 'integer',
+            'passing_score' => 'integer',
             'xp_awarded' => 'integer',
             'coin_awarded' => 'integer',
-            'badges_awarded' => 'array',
-            'is_locked' => 'boolean',
-            'requires_teacher_reset' => 'boolean',
-            'completed_at' => 'datetime',
-            'last_attempt_at' => 'datetime',
+            'reward_multiplier' => 'decimal:2',
+            'payload' => 'array',
+            'attempted_at' => 'datetime',
         ];
     }
 
@@ -69,11 +62,5 @@ class InteractiveActivityResult extends Model
     public function interactiveConfig()
     {
         return $this->belongsTo(InteractiveConfig::class);
-    }
-
-    public function activityLogs()
-    {
-        return $this->hasMany(ActivityLog::class, 'interactive_config_id', 'interactive_config_id')
-            ->whereColumn('activity_logs.user_id', 'interactive_activity_results.user_id');
     }
 }

@@ -38,6 +38,36 @@ class UserFactory extends Factory
         ];
     }
 
+    public function admin(): static
+    {
+        return $this->state(fn () => [
+            'role' => 'admin',
+            'total_points' => fake()->numberBetween(1200, 2200),
+            'current_streak' => fake()->numberBetween(7, 20),
+            'last_active_at' => fake()->dateTimeBetween('-3 days', 'now'),
+        ]);
+    }
+
+    public function instructor(): static
+    {
+        return $this->state(fn () => [
+            'role' => 'instructor',
+            'total_points' => fake()->numberBetween(650, 1800),
+            'current_streak' => fake()->numberBetween(3, 15),
+            'last_active_at' => fake()->dateTimeBetween('-7 days', 'now'),
+        ]);
+    }
+
+    public function student(): static
+    {
+        return $this->state(fn () => [
+            'role' => 'student',
+            'total_points' => fake()->numberBetween(0, 1600),
+            'current_streak' => fake()->numberBetween(0, 12),
+            'last_active_at' => fake()->dateTimeBetween('-30 days', 'now'),
+        ]);
+    }
+
     /**
      * Indicate that the model's email address should be unverified.
      */

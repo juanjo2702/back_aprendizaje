@@ -30,6 +30,14 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Ya estás inscrito en este curso.'], 400);
         }
 
+        if ($user->current_level < (int) $course->minimum_level_required) {
+            return response()->json([
+                'message' => "Necesitas llegar al nivel {$course->minimum_level_required} para comprar este curso.",
+                'required_level' => (int) $course->minimum_level_required,
+                'user_level' => (int) $user->current_level,
+            ], 403);
+        }
+
         $transactionId = 'TXN-'.strtoupper(Str::random(12));
 
         // URL del webhook de pago (mock) al que apuntará el QR

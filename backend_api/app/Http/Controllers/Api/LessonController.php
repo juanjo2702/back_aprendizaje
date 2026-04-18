@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\InteractiveConfig;
 use App\Models\Lesson;
+use App\Models\Purchase;
+use App\Models\ShopItem;
+use App\Services\ActivityAttemptService;
 use App\Services\CourseProgressService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 
 class LessonController extends Controller
 {
@@ -35,6 +37,10 @@ class LessonController extends Controller
         $course = $lesson->module->course;
         $isEnrolled = $course->enrollments()->where('user_id', $user->id)->exists();
         $isOwnerOrAdmin = $user->isAdmin() || ($user->isInstructor() && (int) $course->instructor_id === (int) $user->id);
+        $premiumItem = $lesson->shopItems()
+            ->where('type', 'premium_content')
+            ->where('is_active', true)
+            ->first();
 
         if (! $isEnrolled && ! $isOwnerOrAdmin) {
             return response()->json(['message' => 'No tienes acceso a esta lección.'], 403);
@@ -42,6 +48,25 @@ class LessonController extends Controller
 
         if ($previewMode && ! $isOwnerOrAdmin) {
             return response()->json(['message' => 'Solo el docente dueño puede usar la vista previa.'], 403);
+        }
+
+        if ($premiumItem && ! $isOwnerOrAdmin) {
+            $hasUnlock = Purchase::query()
+                ->where('user_id', $user->id)
+                ->where('shop_item_id', $premiumItem->id)
+                ->whereIn('status', ['completed', 'consumed'])
+                ->exists();
+
+            if (! $hasUnlock) {
+                return response()->json([
+                    'message' => 'Esta lección bonus requiere desbloqueo con monedas desde la tienda.',
+                    'premium_lock' => [
+                        'shop_item_id' => $premiumItem->id,
+                        'name' => $premiumItem->name,
+                        'cost_coins' => $premiumItem->cost_coins,
+                    ],
+                ], 403);
+            }
         }
 
         $progressSnapshot = $progressService->getProgressSnapshot(
@@ -57,6 +82,7 @@ class LessonController extends Controller
 
         [$previousLesson, $nextLesson] = $this->resolveAdjacentLessons($lesson, $course);
         $interactiveConfig = $this->resolveInteractiveConfig($lesson);
+        $commentTarget = $this->resolveCommentTarget($lesson);
 
         return response()->json([
             'lesson' => [
@@ -68,6 +94,7 @@ class LessonController extends Controller
                 'content_text' => $lesson->content_text,
                 'duration' => $lesson->duration,
                 'is_free' => $lesson->is_free,
+                'is_premium_bonus' => (bool) $premiumItem,
                 'sort_order' => $lesson->sort_order,
                 'module_id' => $lesson->module_id,
                 'content' => $this->resolveLessonContent($lesson),
@@ -117,6 +144,13 @@ class LessonController extends Controller
                     : [],
             ],
             'interactive_config' => $interactiveConfig,
+            'comment_target' => $commentTarget,
+            'premium_unlock' => $premiumItem ? [
+                'id' => $premiumItem->id,
+                'name' => $premiumItem->name,
+                'cost_coins' => $premiumItem->cost_coins,
+                'type' => $premiumItem->type,
+            ] : null,
             // Campos legacy conservados para no romper pantallas existentes.
             'game' => $lesson->gameConfiguration ? [
                 'id' => $lesson->gameConfiguration->id,
@@ -164,6 +198,18 @@ class LessonController extends Controller
             return response()->json(['message' => 'No tienes acceso a esta lección.'], 403);
         }
 
+        if ($isEnrolled && $progressService->hasBlockingLockedActivity($user, $course, $lesson->id)) {
+            $blocking = $progressService->getBlockingLockedActivity($user, $course, $lesson->id);
+
+            return response()->json([
+                'message' => 'Tienes una actividad bloqueada por agotar intentos. Necesitas intervención docente para seguir avanzando.',
+                'blocking_activity' => [
+                    'lesson_id' => $blocking?->lesson_id,
+                    'interactive_config_id' => $blocking?->interactive_config_id,
+                ],
+            ], 423);
+        }
+
         $validated = $request->validate([
             'time_spent_seconds' => 'nullable|integer|min:0|max:86400',
         ]);
@@ -180,7 +226,7 @@ class LessonController extends Controller
     /**
      * Registrar finalización de actividad interactiva (renderer genérico).
      */
-    public function completeInteractive(Request $request, Lesson $lesson, CourseProgressService $progressService)
+    public function completeInteractive(Request $request, Lesson $lesson, CourseProgressService $progressService, ActivityAttemptService $activityAttemptService)
     {
         $user = $request->user();
         $course = $lesson->module->course;
@@ -195,49 +241,43 @@ class LessonController extends Controller
             'score' => 'required|numeric|min:0',
             'max_score' => 'required|numeric|min:1',
             'time_spent_seconds' => 'nullable|integer|min:0|max:86400',
+            'answers' => 'nullable|array',
+            'meta' => 'nullable|array',
         ]);
 
-        if (! $progressService->courseHasInteractiveActivities($course)) {
+        if ($isOwnerOrAdmin && ! $isEnrolled) {
+            $ratio = min(1, max(0, ((float) $validated['score']) / ((float) $validated['max_score'])));
+
             return response()->json([
-                'message' => 'Este curso no tiene actividades interactivas habilitadas.',
-            ], 422);
-        }
-
-        $progressService->markLessonCompleted($user, $lesson, $validated['time_spent_seconds'] ?? 0);
-
-        $ratio = min(1, max(0, ((float) $validated['score']) / ((float) $validated['max_score'])));
-        $xpAwarded = (int) round($ratio * 100);
-
-        if ($xpAwarded > 0) {
-            $user->increment('total_points', $xpAwarded);
-            DB::table('points_log')->insert([
-                'user_id' => $user->id,
-                'points' => $xpAwarded,
-                'source' => 'interactive_lesson',
-                'source_id' => $lesson->id,
-                'description' => 'XP por completar actividad interactiva: '.$lesson->title,
-                'created_at' => now(),
-                'updated_at' => now(),
+                'message' => 'Vista previa completada. No se alteró el progreso real del curso.',
+                'xp_awarded' => (int) round($ratio * ($lesson->interactiveConfig?->xp_reward ?? 100)),
+                'coin_awarded' => (int) round($ratio * ($lesson->interactiveConfig?->coin_reward ?? 25)),
+                'progress' => $progressService->getProgressSnapshot($user, $course, false),
             ]);
         }
 
-        $progressService->recordInteractiveCompletion(
+        if (! $lesson->interactiveConfig) {
+            return response()->json([
+                'message' => 'Esta lección no tiene configuración interactiva activa.',
+            ], 422);
+        }
+
+        $result = $activityAttemptService->submit(
             $user,
-            $lesson,
-            'interactive_renderer',
-            (int) $lesson->id,
-            (float) $validated['score'],
-            (float) $validated['max_score'],
-            $xpAwarded
+            $lesson->interactiveConfig,
+            $validated['score'],
+            $validated['max_score'],
+            [
+                'time_spent_seconds' => $validated['time_spent_seconds'] ?? 0,
+                'answers' => $validated['answers'] ?? [],
+                'meta' => $validated['meta'] ?? [],
+            ]
         );
 
-        $snapshot = $progressService->recalculateEnrollmentProgress($user, $course);
-
-        return response()->json([
-            'message' => 'Actividad interactiva completada.',
-            'xp_awarded' => $xpAwarded,
-            'progress' => $snapshot,
-        ]);
+        return response()->json(
+            collect($result)->except(['status_code'])->all(),
+            $result['status_code']
+        );
     }
 
     private function resolveInteractiveConfig(Lesson $lesson): ?array
@@ -256,6 +296,10 @@ class LessonController extends Controller
             'id' => $interactive->id,
             'authoring_mode' => $interactive->authoring_mode,
             'activity_type' => $interactive->activity_type,
+            'max_attempts' => $interactive->max_attempts,
+            'passing_score' => $interactive->passing_score,
+            'xp_reward' => $interactive->xp_reward,
+            'coin_reward' => $interactive->coin_reward,
             'config_payload' => $interactive->config_payload,
             'assets_manifest' => $interactive->assets_manifest,
             'version' => $interactive->version,
@@ -285,7 +329,7 @@ class LessonController extends Controller
             'video' => [
                 'kind' => 'video',
                 'payload' => [
-                    'video_url' => $contentable?->video_url ?? $lesson->content_url,
+                    'video_url' => $contentable?->signedStreamUrl() ?? $contentable?->video_url ?? $lesson->content_url,
                     'embed_url' => $contentable?->embed_url,
                     'provider' => $contentable?->provider,
                     'duration_seconds' => $contentable?->duration_seconds ?? $lesson->duration,
@@ -303,7 +347,7 @@ class LessonController extends Controller
                 'kind' => 'resource',
                 'payload' => [
                     'file_name' => $contentable?->file_name,
-                    'file_url' => $contentable?->file_url ?? $lesson->content_url,
+                    'file_url' => $contentable?->signedDownloadUrl() ?? $contentable?->file_url ?? $lesson->content_url,
                     'mime_type' => $contentable?->mime_type,
                     'file_size_bytes' => $contentable?->file_size_bytes,
                     'is_downloadable' => (bool) ($contentable?->is_downloadable ?? true),
@@ -314,6 +358,27 @@ class LessonController extends Controller
                 'payload' => [],
             ],
         };
+    }
+
+    private function resolveCommentTarget(Lesson $lesson): ?array
+    {
+        if ($lesson->contentable instanceof InteractiveConfig || $lesson->interactiveConfig) {
+            $interactive = $lesson->interactiveConfig ?: $lesson->contentable;
+
+            return [
+                'type' => $interactive->getMorphClass(),
+                'id' => $interactive->getKey(),
+            ];
+        }
+
+        if (! $lesson->contentable) {
+            return null;
+        }
+
+        return [
+            'type' => $lesson->contentable->getMorphClass(),
+            'id' => $lesson->contentable->getKey(),
+        ];
     }
 
     private function resolveAdjacentLessons(Lesson $lesson, $course): array

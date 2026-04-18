@@ -23,6 +23,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'instructor' => \App\Http\Middleware\InstructorMiddleware::class,
             'role' => \App\Http\Middleware\RoleMiddleware::class,
+            'check-level' => \App\Http\Middleware\CheckLevelMiddleware::class,
+            'course-owner' => \App\Http\Middleware\EnsureCourseOwnerAccess::class,
         ]);
 
         // Configure CORS

@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BadgeController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CertificateController;
+use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\CourseController;
 use App\Http\Controllers\Api\GameConfigurationController;
 use App\Http\Controllers\Api\GameTypeController;
@@ -11,11 +12,16 @@ use App\Http\Controllers\Api\GameSessionController;
 use App\Http\Controllers\Api\InstructorContentController;
 use App\Http\Controllers\Api\InteractiveConfigController;
 use App\Http\Controllers\Api\LessonController;
+use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\QuizController;
+use App\Http\Controllers\Api\ShopController;
 use App\Http\Controllers\Api\SocialAuthController;
+use App\Http\Controllers\Api\TeacherStudentController;
 use App\Http\Controllers\Api\UserProgressController;
 use App\Http\Controllers\Api\AdminController;
+use App\Http\Controllers\Api\ActivityValidationController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\TeacherVideoUploadController;
 
 /*
 |--------------------------------------------------------------------------
@@ -62,6 +68,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/modules/{module}/lessons', [InstructorContentController::class, 'storeLesson'])->middleware('role:instructor,admin');
     Route::put('/instructor/lessons/{lesson}', [InstructorContentController::class, 'updateLesson'])->middleware('role:instructor,admin');
     Route::delete('/instructor/lessons/{lesson}', [InstructorContentController::class, 'destroyLesson'])->middleware('role:instructor,admin');
+    Route::post('/teacher/upload-video', [TeacherVideoUploadController::class, 'storeVideo'])->middleware(['role:instructor,admin', 'course-owner']);
+    Route::post('/teacher/upload-resource', [TeacherVideoUploadController::class, 'storeResource'])->middleware(['role:instructor,admin', 'course-owner']);
 
     // Categories CRUD (admin)
     Route::post('/categories', [CategoryController::class, 'store'])->middleware('admin');
@@ -69,9 +77,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/categories/{category}', [CategoryController::class, 'destroy'])->middleware('admin');
 
     // Payments & QR Checkout (student only)
-    Route::post('/payments/intent', [\App\Http\Controllers\Api\PaymentController::class, 'createIntent'])->middleware('role:student');
-    Route::get('/payments/{transaction_id}', [\App\Http\Controllers\Api\PaymentController::class, 'checkStatus'])->middleware('role:student');
-    Route::post('/payments/webhook', [\App\Http\Controllers\Api\PaymentController::class, 'confirmMockPayment'])->middleware('role:student');
+    Route::post('/payments/intent', [PaymentController::class, 'createIntent'])->middleware(['role:student', 'check-level:course_id']);
+    Route::get('/payments/{transaction_id}', [PaymentController::class, 'checkStatus'])->middleware('role:student');
+    Route::post('/payments/webhook', [PaymentController::class, 'confirmMockPayment'])->middleware('role:student');
 
     // ─── Gamification & Progress ───────────────────────────────
 
@@ -83,6 +91,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/recent-activity', [UserProgressController::class, 'recentActivity']);
     });
 
+    // Student economy
+    Route::get('/shop/items', [ShopController::class, 'index'])->middleware('role:student');
+    Route::get('/shop/purchases', [ShopController::class, 'purchases'])->middleware('role:student');
+    Route::post('/shop/items/{shopItem}/purchase', [ShopController::class, 'purchase'])->middleware('role:student');
+
     // Game Configurations (teacher/admin authoring)
     Route::apiResource('game-configurations', GameConfigurationController::class)
         ->except(['create', 'edit'])
@@ -91,6 +104,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('interactive-configs', InteractiveConfigController::class)
         ->except(['create', 'edit'])
         ->middleware('role:instructor,admin');
+    Route::post('/interactive-configs/{interactiveConfig}/reset/{student}', [ActivityValidationController::class, 'reset'])
+        ->middleware(['role:instructor,admin', 'course-owner']);
 
     // Game Sessions (student gameplay API)
     Route::apiResource('game-sessions', GameSessionController::class)
@@ -123,6 +138,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/lessons/{lesson}', [LessonController::class, 'show'])->middleware('role:student,instructor,admin');
     Route::post('/lessons/{lesson}/complete', [LessonController::class, 'complete'])->middleware('role:student,instructor,admin');
     Route::post('/lessons/{lesson}/interactive-complete', [LessonController::class, 'completeInteractive'])->middleware('role:student,instructor,admin');
+    Route::post('/interactive-configs/{interactiveConfig}/attempts', [ActivityValidationController::class, 'store'])->middleware('role:student');
+
+    // Polymorphic comments
+    Route::get('/comments', [CommentController::class, 'index'])->middleware('role:student,instructor,admin');
+    Route::post('/comments', [CommentController::class, 'store'])->middleware('role:student,instructor,admin');
+    Route::post('/comments/{comment}/reply', [CommentController::class, 'reply'])->middleware('role:student,instructor,admin');
+
+    // Teacher student tracking
+    Route::get('/instructor/courses/{course}/students', [TeacherStudentController::class, 'index'])->middleware('role:instructor,admin');
+    Route::get('/instructor/courses/{course}/students/{student}', [TeacherStudentController::class, 'show'])->middleware('role:instructor,admin');
+    Route::get('/instructor/courses/{course}/gradebook', [TeacherStudentController::class, 'gradebook'])->middleware(['role:instructor,admin', 'course-owner']);
+    Route::get('/instructor/alerts', [TeacherStudentController::class, 'alerts'])->middleware('role:instructor,admin');
 
     // ─── Admin Routes ──────────────────────────────────────────
     Route::prefix('admin')->middleware('admin')->group(function () {

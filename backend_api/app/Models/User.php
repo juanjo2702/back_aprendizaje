@@ -20,6 +20,7 @@ class User extends Authenticatable
         'role',
         'bio',
         'total_points',
+        'total_coins',
         'current_streak',
         'last_active_at',
         'provider_name',
@@ -39,6 +40,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'last_active_at' => 'datetime',
+            'total_coins' => 'integer',
         ];
     }
 
@@ -96,6 +98,21 @@ class User extends Authenticatable
         return $this->hasMany(InteractiveActivityResult::class);
     }
 
+    public function activityLogs()
+    {
+        return $this->hasMany(ActivityLog::class);
+    }
+
+    public function purchases()
+    {
+        return $this->hasMany(Purchase::class);
+    }
+
+    public function comments()
+    {
+        return $this->hasMany(Comment::class);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────
 
     public function isAdmin(): bool
@@ -106,5 +123,37 @@ class User extends Authenticatable
     public function isInstructor(): bool
     {
         return $this->role === 'instructor';
+    }
+
+    public function getCurrentLevelAttribute(): int
+    {
+        return (int) floor(($this->total_points ?? 0) / 250) + 1;
+    }
+
+    public function getEarnedCoinsAttribute(): int
+    {
+        return (int) (($this->total_coins ?? 0) + $this->spent_coins);
+    }
+
+    public function getSpentCoinsAttribute(): int
+    {
+        return (int) $this->purchases()
+            ->whereIn('status', ['completed', 'consumed'])
+            ->sum('cost_coins');
+    }
+
+    public function getAvailableCoinsAttribute(): int
+    {
+        return max(0, (int) ($this->total_coins ?? 0));
+    }
+
+    public function getLevelTitleAttribute(): string
+    {
+        return match (true) {
+            $this->current_level >= 12 => 'Maestro',
+            $this->current_level >= 7 => 'Veterano',
+            $this->current_level >= 4 => 'Explorador',
+            default => 'Aprendiz',
+        };
     }
 }

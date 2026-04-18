@@ -97,6 +97,11 @@ class Lesson extends Model
         return $this->belongsTo(Quiz::class);
     }
 
+    public function shopItems()
+    {
+        return $this->hasMany(ShopItem::class);
+    }
+
     // ─── Domain Helpers ─────────────────────────────────────
 
     public function getNormalizedTypeAttribute(): string

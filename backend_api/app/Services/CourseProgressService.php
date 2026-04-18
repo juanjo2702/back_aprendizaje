@@ -47,7 +47,11 @@ class CourseProgressService
         ?float $score = null,
         ?float $maxScore = null,
         int $xpAwarded = 0,
-        array $badgesAwarded = []
+        array $badgesAwarded = [],
+        int $attemptsUsed = 1,
+        int $coinAwarded = 0,
+        bool $isLocked = false,
+        bool $requiresTeacherReset = false
     ): InteractiveActivityResult {
         $course = $lesson->module->course;
         $interactiveConfigId = $lesson->interactiveConfig?->id;
@@ -65,12 +69,40 @@ class CourseProgressService
                 'interactive_config_id' => $interactiveConfigId,
                 'score' => $score,
                 'max_score' => $maxScore,
+                'attempts_used' => max(0, $attemptsUsed),
                 'xp_awarded' => max(0, $xpAwarded),
+                'coin_awarded' => max(0, $coinAwarded),
                 'badges_awarded' => $badgesAwarded,
-                'status' => 'completed',
+                'status' => $isLocked ? 'failed' : 'completed',
+                'is_locked' => $isLocked,
+                'requires_teacher_reset' => $requiresTeacherReset,
                 'completed_at' => now(),
+                'last_attempt_at' => now(),
             ]
         );
+    }
+
+    public function hasBlockingLockedActivity(User $user, Course $course, ?int $ignoreLessonId = null): bool
+    {
+        return InteractiveActivityResult::query()
+            ->where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('is_locked', true)
+            ->where('requires_teacher_reset', true)
+            ->when($ignoreLessonId, fn ($query) => $query->where('lesson_id', '!=', $ignoreLessonId))
+            ->exists();
+    }
+
+    public function getBlockingLockedActivity(User $user, Course $course, ?int $ignoreLessonId = null): ?InteractiveActivityResult
+    {
+        return InteractiveActivityResult::query()
+            ->where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('is_locked', true)
+            ->where('requires_teacher_reset', true)
+            ->when($ignoreLessonId, fn ($query) => $query->where('lesson_id', '!=', $ignoreLessonId))
+            ->latest('last_attempt_at')
+            ->first();
     }
 
     public function getProgressSnapshot(User $user, Course $course, bool $persistEnrollment = false): array

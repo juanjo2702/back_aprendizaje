@@ -18,7 +18,10 @@ class CourseController extends Controller
 
         $query = Course::published()
             ->with(['instructor:id,name,avatar', 'category:id,name,slug'])
-            ->withCount('enrollments as total_students');
+            ->withCount('enrollments as total_students')
+            ->withExists([
+                'lessons as has_interactive_activities' => fn ($q) => $q->whereIn('type', ['interactive', 'game', 'quiz']),
+            ]);
 
         if ($user) {
             $query->withExists([
@@ -34,6 +37,26 @@ class CourseController extends Controller
         // Filter by level
         if ($request->filled('level')) {
             $query->where('level', $request->level);
+        }
+
+        // Filter by price type
+        if ($request->filled('price')) {
+            if ($request->price === 'free') {
+                $query->where('price', '<=', 0);
+            } elseif ($request->price === 'paid') {
+                $query->where('price', '>', 0);
+            }
+        }
+
+        // Filter by gamification availability
+        if ($request->filled('gamification')) {
+            $wantsGamification = filter_var($request->gamification, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+            if ($wantsGamification === true) {
+                $query->whereHas('lessons', fn ($q) => $q->whereIn('type', ['interactive', 'game', 'quiz']));
+            } elseif ($wantsGamification === false) {
+                $query->whereDoesntHave('lessons', fn ($q) => $q->whereIn('type', ['interactive', 'game', 'quiz']));
+            }
         }
 
         // Search by keyword
@@ -64,7 +87,19 @@ class CourseController extends Controller
             $query->latest();
         }
 
-        return $query->paginate($request->get('per_page', 12));
+        $courses = $query->paginate($request->get('per_page', 12));
+
+        if ($user) {
+            $courses->getCollection()->transform(function (Course $course) use ($user) {
+                $course->setAttribute('required_level', (int) $course->minimum_level_required);
+                $course->setAttribute('user_level', (int) $user->current_level);
+                $course->setAttribute('is_level_locked', (int) $user->current_level < (int) $course->minimum_level_required);
+
+                return $course;
+            });
+        }
+
+        return $courses;
     }
 
     /**
@@ -79,7 +114,8 @@ class CourseController extends Controller
             ->with([
                 'instructor:id,name,avatar,bio',
                 'category:id,name,slug',
-                'modules.lessons:id,module_id,title,type,duration,sort_order,is_free',
+                'modules.lessons:id,module_id,title,type,duration,sort_order,is_free,content_url',
+                'shopItems:id,course_id,lesson_id,name,slug,type,cost_coins,minimum_level_required,metadata,is_active',
             ])
             ->withCount('enrollments as total_students');
 
@@ -111,10 +147,26 @@ class CourseController extends Controller
         $course->setAttribute('is_enrolled', $isEnrolled);
         $course->setAttribute('can_manage_course', $canManageCourse);
         $course->setAttribute('is_preview', $previewMode);
+        $course->setAttribute('required_level', (int) $course->minimum_level_required);
+        $course->setAttribute('user_level', $user ? (int) $user->current_level : null);
+        $course->setAttribute('is_level_locked', $user ? ((int) $user->current_level < (int) $course->minimum_level_required) : ((int) $course->minimum_level_required > 1));
         $course->setAttribute('has_interactive_activities', $hasInteractiveActivities);
         $course->setAttribute('player_tabs', $hasInteractiveActivities
             ? ['content', 'achievements_ranking']
             : ['content']);
+        $course->setAttribute('preview_video_url', $course->promo_video);
+        $course->setAttribute('shop_preview', $course->shopItems
+            ->where('is_active', true)
+            ->values()
+            ->map(fn ($item) => [
+                'id' => $item->id,
+                'name' => $item->name,
+                'type' => $item->type,
+                'cost_coins' => $item->cost_coins,
+                'minimum_level_required' => $item->minimum_level_required,
+                'lesson_id' => $item->lesson_id,
+            ])
+            ->all());
 
         $course->modules->each(function ($module) {
             $module->lessons->each(function ($lesson) {
@@ -125,6 +177,22 @@ class CourseController extends Controller
                 });
             });
         });
+
+        if (! $course->preview_video_url) {
+            $previewLesson = $course->modules
+                ->flatMap(fn ($module) => $module->lessons)
+                ->first(fn ($lesson) => in_array($lesson->normalized_type, ['video', 'interactive'], true) || $lesson->is_free);
+
+            $course->setAttribute('preview_video_url', $previewLesson?->content_url);
+            $course->setAttribute('preview_lesson', $previewLesson ? [
+                'id' => $previewLesson->id,
+                'title' => $previewLesson->title,
+                'type' => $previewLesson->normalized_type,
+                'is_free' => (bool) $previewLesson->is_free,
+            ] : null);
+        } else {
+            $course->setAttribute('preview_lesson', null);
+        }
 
         return response()->json($course);
     }
@@ -171,6 +239,7 @@ class CourseController extends Controller
             'level' => 'required|in:beginner,intermediate,advanced,all_levels',
             'language' => 'nullable|string|max:10',
             'status' => 'sometimes|in:draft,pending,published,archived',
+            'minimum_level_required' => 'nullable|integer|min:1|max:99',
             'requirements' => 'nullable|array',
             'what_you_learn' => 'nullable|array',
             'has_certificate' => 'sometimes|boolean',
@@ -180,6 +249,7 @@ class CourseController extends Controller
         $validated['slug'] = Str::slug($validated['title']).'-'.Str::random(5);
         $validated['instructor_id'] = $request->user()->id;
         $validated['status'] = $validated['status'] ?? 'draft';
+        $validated['minimum_level_required'] = max(1, (int) ($validated['minimum_level_required'] ?? 1));
 
         $course = Course::create($validated);
 
@@ -202,11 +272,16 @@ class CourseController extends Controller
             'level' => 'sometimes|in:beginner,intermediate,advanced,all_levels',
             'language' => 'nullable|string|max:10',
             'status' => 'sometimes|in:draft,pending,published,archived',
+            'minimum_level_required' => 'nullable|integer|min:1|max:99',
             'requirements' => 'nullable|array',
             'what_you_learn' => 'nullable|array',
             'has_certificate' => 'sometimes|boolean',
             'certificate_min_score' => 'nullable|integer|min:0|max:100',
         ]);
+
+        if (array_key_exists('minimum_level_required', $validated)) {
+            $validated['minimum_level_required'] = max(1, (int) ($validated['minimum_level_required'] ?? 1));
+        }
 
         $course->update($validated);
 

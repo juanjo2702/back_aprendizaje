@@ -30,5 +30,9 @@ class LessonReading extends Model
     {
         return $this->belongsTo(Lesson::class);
     }
-}
 
+    public function comments()
+    {
+        return $this->morphMany(Comment::class, 'commentable');
+    }
+}

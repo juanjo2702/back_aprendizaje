@@ -15,6 +15,10 @@ class InteractiveConfig extends Model
         'module_id',
         'authoring_mode',
         'activity_type',
+        'max_attempts',
+        'passing_score',
+        'xp_reward',
+        'coin_reward',
         'config_payload',
         'assets_manifest',
         'source_package_path',
@@ -27,6 +31,10 @@ class InteractiveConfig extends Model
         return [
             'config_payload' => 'array',
             'assets_manifest' => 'array',
+            'max_attempts' => 'integer',
+            'passing_score' => 'integer',
+            'xp_reward' => 'integer',
+            'coin_reward' => 'integer',
             'is_active' => 'boolean',
             'version' => 'integer',
         ];
@@ -51,5 +59,23 @@ class InteractiveConfig extends Model
     {
         return $this->hasMany(InteractiveActivityResult::class);
     }
-}
 
+    public function activityLogs()
+    {
+        return $this->hasMany(ActivityLog::class);
+    }
+
+    public function comments()
+    {
+        return $this->morphMany(Comment::class, 'commentable');
+    }
+
+    public function rewardMultiplierForAttempt(int $attemptNumber): float
+    {
+        return match (true) {
+            $attemptNumber <= 1 => 1.0,
+            $attemptNumber === 2 => 0.7,
+            default => 0.5,
+        };
+    }
+}
