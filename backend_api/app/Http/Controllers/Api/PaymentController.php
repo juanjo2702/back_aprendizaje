@@ -4,15 +4,19 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Course;
-use App\Models\Enrollment;
 use App\Models\Payment;
+use App\Services\PaymentSettlementService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
 
 class PaymentController extends Controller
 {
+    public function __construct(
+        private readonly PaymentSettlementService $paymentSettlementService
+    ) {
+    }
+
     /**
      * Genera la intención de compra y el código QR.
      */
@@ -26,7 +30,7 @@ class PaymentController extends Controller
         $user = $request->user();
 
         // Verificar si ya está inscrito
-        if (Enrollment::where('user_id', $user->id)->where('course_id', $course->id)->exists()) {
+        if ($user->enrollments()->where('course_id', $course->id)->exists()) {
             return response()->json(['message' => 'Ya estás inscrito en este curso.'], 400);
         }
 
@@ -50,13 +54,19 @@ class PaymentController extends Controller
         // Si el precio es 0, no generamos QR, creamos inscripción directo (o redirigimos).
         // Para este escenario asumimos cursos de pago.
 
+        $split = $this->paymentSettlementService->splitAmounts((float) $course->price);
+
         $payment = Payment::create([
             'user_id' => $user->id,
             'course_id' => $course->id,
             'amount' => $course->price,
             'status' => 'pending',
+            'payment_method' => 'qr_manual',
+            'provider' => 'bolivia_qr',
             'qr_data' => $paymentUrl,
             'transaction_id' => $transactionId,
+            'platform_fee_amount' => $split['platform_fee_amount'],
+            'instructor_amount' => $split['instructor_amount'],
         ]);
 
         return response()->json([
@@ -64,6 +74,7 @@ class PaymentController extends Controller
             'qr_code' => $qrBase64,
             'amount' => $course->price,
             'status' => 'pending',
+            'payment' => $payment,
         ]);
     }
 
@@ -93,25 +104,17 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Payment already completed.'], 400);
         }
 
-        DB::beginTransaction();
         try {
-            $payment->update(['status' => 'completed']);
-
-            // Generar inscripción
-            Enrollment::firstOrCreate([
-                'user_id' => $payment->user_id,
-                'course_id' => $payment->course_id,
-            ], [
-                'progress' => 0,
-                'enrolled_at' => now(),
-            ]);
-
-            DB::commit();
+            $payment = $this->paymentSettlementService->approve(
+                $payment,
+                null,
+                'Pago confirmado por webhook QR.',
+                null,
+                'webhook_qr'
+            );
 
             return response()->json(['message' => 'Payment successful', 'payment' => $payment]);
         } catch (\Exception $e) {
-            DB::rollBack();
-
             return response()->json(['message' => 'Payment confirmation failed.'], 500);
         }
     }

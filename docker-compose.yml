@@ -61,9 +61,9 @@ services:
         cp .env.example .env &&
         php artisan key:generate --force;
       fi &&
-      php -d memory_limit=512M artisan migrate:fresh --force &&
-      php -d memory_limit=512M artisan db:seed --force || echo 'Seeders fallaron, continuando...' &&
-      php artisan serve --host=0.0.0.0 --port=8000"
+      php -d memory_limit=512M -d upload_max_filesize=256M -d post_max_size=256M artisan migrate:fresh --force &&
+      php -d memory_limit=512M -d upload_max_filesize=256M -d post_max_size=256M artisan db:seed --force || echo 'Seeders fallaron, continuando...' &&
+      php -d upload_max_filesize=256M -d post_max_size=256M -d memory_limit=512M artisan serve --host=0.0.0.0 --port=8000"
 
 networks:
   plataforma_network:

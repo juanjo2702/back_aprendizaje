@@ -23,6 +23,10 @@ class Course extends Model
         'level',
         'language',
         'status',
+        'submitted_for_review_at',
+        'published_at',
+        'approved_by',
+        'review_notes',
         'requirements',
         'what_you_learn',
         'has_certificate',
@@ -39,6 +43,8 @@ class Course extends Model
             'has_certificate' => 'boolean',
             'certificate_min_score' => 'integer',
             'minimum_level_required' => 'integer',
+            'submitted_for_review_at' => 'datetime',
+            'published_at' => 'datetime',
         ];
     }
 
@@ -47,6 +53,11 @@ class Course extends Model
     public function instructor()
     {
         return $this->belongsTo(User::class, 'instructor_id');
+    }
+
+    public function approver()
+    {
+        return $this->belongsTo(User::class, 'approved_by');
     }
 
     public function category()
@@ -67,6 +78,11 @@ class Course extends Model
     public function enrollments()
     {
         return $this->hasMany(Enrollment::class);
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
     }
 
     public function students()

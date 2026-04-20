@@ -58,13 +58,16 @@ class LessonVideo extends Model implements HasMedia
             return $this->video_url;
         }
 
-        return URL::temporarySignedRoute(
+        $signedPath = URL::temporarySignedRoute(
             'protected-media.show',
             now()->addMinutes($minutes),
             [
                 'media' => $media->id,
                 'filename' => $media->file_name,
-            ]
+            ],
+            false
         );
+
+        return rtrim(config('app.url') ?: url('/'), '/').$signedPath;
     }
 }

@@ -70,6 +70,14 @@ RUN { \
     echo 'opcache.revalidate_freq=2'; \
     echo 'opcache.fast_shutdown=1'; \
     } > /usr/local/etc/php/conf.d/opcache-recommended.ini
+RUN { \
+    echo 'upload_max_filesize=256M'; \
+    echo 'post_max_size=256M'; \
+    echo 'max_file_uploads=50'; \
+    echo 'memory_limit=512M'; \
+    echo 'max_execution_time=300'; \
+    echo 'max_input_time=300'; \
+    } > /usr/local/etc/php/conf.d/uploads.ini
 
 # Copy Nginx configuration
 COPY .docker/nginx.conf /etc/nginx/sites-available/default
@@ -122,6 +130,15 @@ COPY . .
 
 # Install dependencies (including dev)
 RUN composer install --optimize-autoloader --no-progress
+
+RUN { \
+    echo 'upload_max_filesize=256M'; \
+    echo 'post_max_size=256M'; \
+    echo 'max_file_uploads=50'; \
+    echo 'memory_limit=512M'; \
+    echo 'max_execution_time=300'; \
+    echo 'max_input_time=300'; \
+    } > /usr/local/etc/php/conf.d/uploads.ini
 
 # Change to non-root user
 USER www-data

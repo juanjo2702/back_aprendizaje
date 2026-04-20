@@ -20,6 +20,11 @@ use App\Http\Controllers\Api\TeacherStudentController;
 use App\Http\Controllers\Api\UserProgressController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\ActivityValidationController;
+use App\Http\Controllers\Api\AdminCourseReviewController;
+use App\Http\Controllers\Api\AdminFinanceController;
+use App\Http\Controllers\Api\AdminGamificationController;
+use App\Http\Controllers\Api\AdminReportController;
+use App\Http\Controllers\Api\AdminSettingsController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\TeacherVideoUploadController;
 
@@ -47,6 +52,7 @@ Route::get('/game-types', [GameTypeController::class, 'index']);
 
 // Public certificate verification
 Route::post('/certificates/verify', [CertificateController::class, 'verify']);
+Route::post('/payments/webhook', [PaymentController::class, 'confirmMockPayment']);
 
 // ─── Protected (Sanctum) ────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
@@ -60,6 +66,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/instructor/courses', [CourseController::class, 'mine'])->middleware('role:instructor,admin');
     Route::get('/instructor/courses/{course}/structure', [InstructorContentController::class, 'courseStructure'])->middleware('role:instructor,admin');
     Route::post('/courses', [CourseController::class, 'store'])->middleware('role:instructor,admin');
+    Route::put('/courses/{course}/status', [CourseController::class, 'updateStatus'])->middleware('role:instructor,admin');
     Route::put('/courses/{course}', [CourseController::class, 'update'])->middleware('role:instructor,admin');
     Route::delete('/courses/{course}', [CourseController::class, 'destroy'])->middleware('role:instructor,admin');
     Route::post('/courses/{course}/modules', [InstructorContentController::class, 'storeModule'])->middleware('role:instructor,admin');
@@ -79,8 +86,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // Payments & QR Checkout (student only)
     Route::post('/payments/intent', [PaymentController::class, 'createIntent'])->middleware(['role:student', 'check-level:course_id']);
     Route::get('/payments/{transaction_id}', [PaymentController::class, 'checkStatus'])->middleware('role:student');
-    Route::post('/payments/webhook', [PaymentController::class, 'confirmMockPayment'])->middleware('role:student');
-
     // ─── Gamification & Progress ───────────────────────────────
 
     // User Progress & Dashboard (student only)
@@ -165,10 +170,36 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/users/{user}/role', [AdminController::class, 'updateRole']);
         Route::put('/users/{user}/status', [AdminController::class, 'updateStatus']);
         
-        // Courses management (admin view)
-        Route::get('/courses', [AdminController::class, 'courses']);
-        Route::get('/courses/{course}', [AdminController::class, 'showCourse']);
+        // Course review & curation
+        Route::get('/courses/review-inbox', [AdminCourseReviewController::class, 'inbox']);
+        Route::get('/courses/{course}/review', [AdminCourseReviewController::class, 'show']);
+        Route::put('/courses/{course}/approval-status', [AdminCourseReviewController::class, 'updateStatus']);
         Route::delete('/courses/{course}', [AdminController::class, 'destroyCourse']);
+
+        // Finance
+        Route::get('/finances/payments', [AdminFinanceController::class, 'payments']);
+        Route::post('/finances/payments/{payment}/confirm', [AdminFinanceController::class, 'confirmPayment']);
+        Route::post('/finances/payments/{payment}/reject', [AdminFinanceController::class, 'rejectPayment']);
+        Route::get('/finances/payouts', [AdminFinanceController::class, 'payouts']);
+        Route::put('/finances/payouts/{payout}', [AdminFinanceController::class, 'updatePayout']);
+
+        // Global settings
+        Route::get('/settings', [AdminSettingsController::class, 'show']);
+        Route::put('/settings', [AdminSettingsController::class, 'update']);
+
+        // Gamification lab
+        Route::get('/gamification/badges', [AdminGamificationController::class, 'badges']);
+        Route::post('/gamification/badges', [AdminGamificationController::class, 'storeBadge']);
+        Route::put('/gamification/badges/{badge}', [AdminGamificationController::class, 'updateBadge']);
+        Route::delete('/gamification/badges/{badge}', [AdminGamificationController::class, 'destroyBadge']);
+        Route::get('/gamification/rewards', [AdminGamificationController::class, 'rewards']);
+        Route::post('/gamification/rewards', [AdminGamificationController::class, 'storeReward']);
+        Route::put('/gamification/rewards/{shopItem}', [AdminGamificationController::class, 'updateReward']);
+        Route::delete('/gamification/rewards/{shopItem}', [AdminGamificationController::class, 'destroyReward']);
+
+        // Reports
+        Route::get('/reports/bottlenecks', [AdminReportController::class, 'bottlenecks']);
+        Route::get('/reports/gamification-audit', [AdminReportController::class, 'gamificationAudit']);
         
         // System
         Route::get('/system-info', [AdminController::class, 'systemInfo']);

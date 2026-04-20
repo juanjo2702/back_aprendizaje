@@ -18,15 +18,26 @@ class TeacherMediaUploadService
         int $totalChunks,
         UploadedFile $chunk,
         string $originalName,
-        ?string $mimeType = null
+        ?string $mimeType = null,
+        ?int $fileSize = null
     ): array {
         $disk = Storage::disk('local');
         $safeType = $type === 'resource' ? 'resource' : 'video';
         $chunkDirectory = $this->chunkDirectory($safeType, $uploadId);
+
+        if ($chunkIndex === 0) {
+            $disk->deleteDirectory($chunkDirectory);
+            $disk->deleteDirectory($this->finalDirectory($safeType, $uploadId));
+        }
+
         $disk->makeDirectory($chunkDirectory);
 
         $chunkPath = "{$chunkDirectory}/chunk-{$chunkIndex}.part";
-        $disk->put($chunkPath, $chunk->get());
+        $stream = fopen($chunk->getRealPath(), 'rb');
+        $disk->put($chunkPath, $stream);
+        if (is_resource($stream)) {
+            fclose($stream);
+        }
 
         $storedChunks = collect($disk->files($chunkDirectory))
             ->filter(fn (string $path) => str_ends_with($path, '.part'))
@@ -81,6 +92,7 @@ class TeacherMediaUploadService
             'mime_type' => $mimeType ?: mime_content_type($absolutePath),
             'path' => $finalPath,
             'size' => $size,
+            'expected_size' => $fileSize,
             'created_at' => now()->toIso8601String(),
         ];
 

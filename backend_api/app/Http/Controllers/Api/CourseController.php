@@ -4,11 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Course;
+use App\Services\CourseWorkflowService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class CourseController extends Controller
 {
+    public function __construct(
+        private readonly CourseWorkflowService $courseWorkflowService
+    ) {
+    }
+
     /**
      * Public catalog: list published courses with filters.
      */
@@ -212,7 +218,21 @@ class CourseController extends Controller
 
         $query = Course::query()
             ->with(['category:id,name,slug'])
-            ->withCount(['enrollments as total_students', 'modules', 'lessons']);
+            ->withCount([
+                'enrollments as total_students',
+                'modules',
+                'lessons',
+                'enrollments as active_students' => fn ($query) => $query->whereHas(
+                    'user',
+                    fn ($userQuery) => $userQuery
+                        ->whereNotNull('last_active_at')
+                        ->where('last_active_at', '>=', now()->subDays(7))
+                ),
+            ])
+            ->withSum([
+                'payments as completed_sales_amount' => fn ($query) => $query->where('status', 'completed'),
+            ], 'amount')
+            ->withAvg('interactiveActivityResults as average_learning_score', 'score');
 
         if (! $user->isAdmin() || ! $request->boolean('all')) {
             $query->where('instructor_id', $user->id);
@@ -223,6 +243,40 @@ class CourseController extends Controller
         }
 
         return $query->latest()->paginate($request->get('per_page', 12));
+    }
+
+    /**
+     * Update only the publication status for a course.
+     */
+    public function updateStatus(Request $request, Course $course)
+    {
+        $this->authorizeOwnerOrAdmin($request, $course);
+
+        $user = $request->user();
+        $allowed = $user->isAdmin()
+            ? 'required|in:draft,pending,published'
+            : 'required|in:draft,pending';
+
+        $validated = $request->validate([
+            'status' => $allowed,
+            'review_notes' => 'nullable|string|max:2000',
+        ]);
+
+        $course = $this->courseWorkflowService->transition(
+            $course,
+            $user,
+            $validated['status'],
+            $validated['review_notes'] ?? null
+        );
+
+        return response()->json([
+            'message' => match ($validated['status']) {
+                'pending' => 'Curso enviado a revisión correctamente.',
+                'published' => 'Curso publicado correctamente.',
+                default => 'Curso movido a borrador correctamente.',
+            },
+            'course' => $course,
+        ]);
     }
 
     /**

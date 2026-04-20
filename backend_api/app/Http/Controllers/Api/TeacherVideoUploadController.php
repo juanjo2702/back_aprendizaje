@@ -36,12 +36,17 @@ class TeacherVideoUploadController extends Controller
 
     private function handleChunkUpload(Request $request, string $type, array $allowedMimeTypes, int $maxSize): \Illuminate\Http\JsonResponse
     {
+        @set_time_limit(0);
+        @ini_set('max_execution_time', '0');
+        @ini_set('max_input_time', '0');
+
         $validated = $request->validate([
             'course_id' => 'required|integer|exists:courses,id',
             'upload_id' => 'nullable|string|max:100',
             'chunk_index' => 'required|integer|min:0',
             'total_chunks' => 'required|integer|min:1|max:500',
             'file_name' => 'required|string|max:255',
+            'file_size' => "required|integer|min:1|max:{$maxSize}",
             'mime_type' => 'nullable|string|max:150',
             'chunk' => 'required|file|max:102400',
         ]);
@@ -50,6 +55,12 @@ class TeacherVideoUploadController extends Controller
         if (! in_array($mimeType, $allowedMimeTypes, true)) {
             return response()->json([
                 'message' => 'Formato no permitido para este tipo de archivo.',
+            ], 422);
+        }
+
+        if ((int) $validated['chunk_index'] >= (int) $validated['total_chunks']) {
+            return response()->json([
+                'message' => 'El índice del chunk no coincide con el total de partes enviadas.',
             ], 422);
         }
 
@@ -66,7 +77,8 @@ class TeacherVideoUploadController extends Controller
             (int) $validated['total_chunks'],
             $request->file('chunk'),
             $validated['file_name'],
-            $mimeType
+            $mimeType,
+            (int) $validated['file_size']
         );
 
         return response()->json($payload);

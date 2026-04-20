@@ -10,7 +10,7 @@ class ProtectedMediaController extends Controller
 {
     public function show(Request $request, Media $media, string $filename)
     {
-        if (! $request->hasValidSignature()) {
+        if (! $request->hasValidRelativeSignature()) {
             abort(401, 'El enlace del archivo ya expiró o es inválido.');
         }
 

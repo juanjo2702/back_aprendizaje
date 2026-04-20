@@ -3,124 +3,160 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
-use App\Models\Course;
+use App\Models\AdminActivityLog;
+use App\Models\Badge;
 use App\Models\Category;
-use App\Models\Payment;
+use App\Models\Course;
+use App\Models\Enrollment;
 use App\Models\GameSession;
+use App\Models\InteractiveConfig;
+use App\Models\Payment;
+use App\Models\Payout;
+use App\Models\ShopItem;
+use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
+use Spatie\MediaLibrary\MediaCollections\Models\Media;
 
 class AdminController extends Controller
 {
-    /**
-     * Get dashboard statistics
-     */
-    public function dashboardStats(Request $request)
+    public function dashboardStats()
     {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
+        $activeUsers = User::query()
+            ->where(function ($query) {
+                $query
+                    ->whereNotNull('last_active_at')
+                    ->where('last_active_at', '>=', now()->subDays(7))
+                    ->orWhere('created_at', '>=', now()->subDays(7));
+            })
+            ->count();
 
-        $totalUsers = User::count();
-        $totalCourses = Course::where('is_published', true)->count();
-        $totalRevenue = Payment::where('status', 'completed')->sum('amount');
-        $activeUsers = User::where('last_login_at', '>=', Carbon::now()->subDays(7))->count();
-        $totalInstructors = User::where('role', 'instructor')->count();
-        $pendingCourses = Course::where('is_published', false)->count();
-        
-        // Recent activity
-        $recentUsers = User::latest()->take(5)->get(['id', 'name', 'email', 'role', 'created_at']);
-        $recentPayments = Payment::with('user:id,name', 'course:id,title')
-            ->latest()
-            ->take(5)
+        $totalEnrollments = Enrollment::query()->count();
+        $dropoutBase = Enrollment::query()
+            ->where('created_at', '<=', now()->subDays(14))
+            ->count();
+        $dropouts = Enrollment::query()
+            ->where('created_at', '<=', now()->subDays(14))
+            ->where('progress', '<', 20)
+            ->count();
+
+        $popularCategories = Category::query()
+            ->select('categories.id', 'categories.name')
+            ->leftJoin('courses', 'courses.category_id', '=', 'categories.id')
+            ->leftJoin('enrollments', 'enrollments.course_id', '=', 'courses.id')
+            ->groupBy('categories.id', 'categories.name')
+            ->selectRaw('count(enrollments.id) as total_enrollments')
+            ->orderByDesc('total_enrollments')
+            ->limit(6)
             ->get();
-        
-        // Course enrollments
-        $popularCourses = Course::withCount('users')
-            ->orderBy('users_count', 'desc')
+
+        $videoBytes = (int) Media::query()
+            ->where('collection_name', 'lesson_video')
+            ->sum('size');
+
+        $storagePath = storage_path();
+        $storageTotal = @disk_total_space($storagePath) ?: 0;
+        $storageFree = @disk_free_space($storagePath) ?: 0;
+        $storageUsed = $storageTotal > 0 ? ($storageTotal - $storageFree) : 0;
+
+        $bottlenecks = InteractiveConfig::query()
+            ->with(['course:id,title,slug', 'lesson:id,title'])
+            ->withCount([
+                'activityResults as total_results',
+                'activityResults as failed_results' => fn ($query) => $query->where('status', 'failed'),
+            ])
+            ->withAvg('activityResults as average_attempts', 'attempts_used')
+            ->get()
+            ->filter(fn (InteractiveConfig $config) => (int) $config->total_results > 0)
+            ->sortByDesc('failed_results')
             ->take(5)
-            ->get(['id', 'title', 'slug', 'instructor_id', 'price']);
+            ->map(fn (InteractiveConfig $config) => [
+                'interactive_config_id' => $config->id,
+                'course_title' => $config->course?->title,
+                'lesson_title' => $config->lesson?->title,
+                'activity_type' => $config->activity_type,
+                'total_results' => (int) $config->total_results,
+                'failed_results' => (int) $config->failed_results,
+                'average_attempts' => round((float) $config->average_attempts, 2),
+            ]);
 
         return response()->json([
-            'stats' => [
-                'total_users' => $totalUsers,
-                'total_courses' => $totalCourses,
-                'total_revenue' => $totalRevenue,
+            'overview' => [
+                'total_users' => User::query()->count(),
                 'active_users' => $activeUsers,
-                'total_instructors' => $totalInstructors,
-                'pending_courses' => $pendingCourses,
-            ],
-            'recent_users' => $recentUsers,
-            'recent_payments' => $recentPayments,
-            'popular_courses' => $popularCourses,
-            'activity_summary' => [
-                'users_today' => User::whereDate('created_at', Carbon::today())->count(),
-                'payments_today' => Payment::whereDate('created_at', Carbon::today())
+                'monthly_revenue' => (float) Payment::query()
                     ->where('status', 'completed')
-                    ->count(),
-                'new_enrollments_today' => DB::table('course_user')
-                    ->whereDate('created_at', Carbon::today())
-                    ->count(),
-            ]
+                    ->whereBetween('reviewed_at', [now()->startOfMonth(), now()->endOfMonth()])
+                    ->sum('amount'),
+                'dropout_rate' => $dropoutBase > 0 ? round(($dropouts / $dropoutBase) * 100, 2) : 0,
+                'pending_reviews' => Course::query()->where('status', 'pending')->count(),
+                'pending_payments' => Payment::query()->where('status', 'pending')->count(),
+                'pending_payouts' => Payout::query()->where('status', 'pending')->count(),
+                'published_courses' => Course::query()->where('status', 'published')->count(),
+            ],
+            'popular_categories' => $popularCategories,
+            'storage' => [
+                'video_bytes' => $videoBytes,
+                'video_human' => $this->formatBytes($videoBytes),
+                'disk_used_bytes' => $storageUsed,
+                'disk_total_bytes' => $storageTotal,
+                'disk_used_percentage' => $storageTotal > 0 ? round(($storageUsed / $storageTotal) * 100, 2) : 0,
+            ],
+            'recent_users' => User::query()
+                ->latest()
+                ->limit(6)
+                ->get(['id', 'name', 'email', 'role', 'created_at']),
+            'recent_payments' => Payment::query()
+                ->with(['user:id,name,email', 'course:id,title'])
+                ->latest()
+                ->limit(6)
+                ->get(),
+            'recent_logs' => AdminActivityLog::query()
+                ->with('actor:id,name,email')
+                ->latest()
+                ->limit(8)
+                ->get(),
+            'bottlenecks_preview' => $bottlenecks,
+            'inventory' => [
+                'badges' => Badge::query()->count(),
+                'rewards' => ShopItem::query()->count(),
+                'courses' => Course::query()->count(),
+            ],
         ]);
     }
 
-    /**
-     * Get all users with pagination and filters
-     */
     public function index(Request $request)
     {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
         $query = User::query();
 
-        // Search filter
-        if ($request->has('search')) {
-            $search = $request->input('search');
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%");
+        if ($request->filled('search')) {
+            $search = $request->string('search');
+            $query->where(function ($builder) use ($search) {
+                $builder
+                    ->where('name', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
             });
         }
 
-        // Role filter
-        if ($request->has('role') && $request->input('role') !== '') {
-            $query->where('role', $request->input('role'));
+        if ($request->filled('role')) {
+            $query->where('role', $request->string('role'));
         }
 
-        // Status filter (email verification)
-        if ($request->has('status')) {
-            if ($request->input('status') === 'verified') {
-                $query->whereNotNull('email_verified_at');
-            } elseif ($request->input('status') === 'pending') {
-                $query->whereNull('email_verified_at');
-            }
+        if ($request->filled('status')) {
+            match ($request->string('status')->toString()) {
+                'verified' => $query->whereNotNull('email_verified_at'),
+                'pending' => $query->whereNull('email_verified_at'),
+                default => null,
+            };
         }
 
-        // Date range filter
-        if ($request->has('date_from')) {
-            $query->whereDate('created_at', '>=', $request->input('date_from'));
-        }
-        if ($request->has('date_to')) {
-            $query->whereDate('created_at', '<=', $request->input('date_to'));
-        }
-
-        // Sorting
-        $sortField = $request->input('sort_by', 'created_at');
-        $sortDirection = $request->input('sort_dir', 'desc');
-        $query->orderBy($sortField, $sortDirection);
-
-        // Pagination
-        $perPage = $request->input('per_page', 15);
-        $users = $query->paginate($perPage);
+        $users = $query
+            ->orderBy(
+                $request->string('sort_by', 'created_at')->toString(),
+                $request->string('sort_dir', 'desc')->toString()
+            )
+            ->paginate($request->integer('per_page', 15));
 
         return response()->json([
             'data' => $users->items(),
@@ -129,47 +165,25 @@ class AdminController extends Controller
                 'per_page' => $users->perPage(),
                 'current_page' => $users->currentPage(),
                 'last_page' => $users->lastPage(),
-            ]
+            ],
         ]);
     }
 
-    /**
-     * Get single user details
-     */
-    public function show(Request $request, User $user)
+    public function show(User $user)
     {
-        $admin = $request->user();
-        
-        if (!$admin->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
-        $user->load([
-            'courses',
-            'badges',
-            'certificates',
-            'gameSessions' => function ($query) {
-                $query->latest()->take(10);
-            },
-            'quizAttempts' => function ($query) {
-                $query->with('quiz')->latest()->take(10);
-            }
-        ]);
-
-        return response()->json($user);
+        return response()->json(
+            $user->load([
+                'courses:id,title,instructor_id,status,price,created_at',
+                'badges:id,name,slug,icon,type',
+                'certificates',
+                'gameSessions' => fn ($query) => $query->latest()->limit(10),
+                'quizAttempts' => fn ($query) => $query->with('quiz')->latest()->limit(10),
+            ])
+        );
     }
 
-    /**
-     * Create new user (admin only)
-     */
     public function store(Request $request)
     {
-        $admin = $request->user();
-        
-        if (!$admin->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
@@ -179,30 +193,23 @@ class AdminController extends Controller
         ]);
 
         $validated['password'] = bcrypt($validated['password']);
-        $validated['email_verified_at'] = now(); // Auto-verify for admin created users
+        $validated['email_verified_at'] = now();
 
-        $user = User::create($validated);
+        $user = User::query()->create($validated);
+
+        AdminActivityLog::record($request->user(), 'user.created', $user);
 
         return response()->json([
-            'message' => 'User created successfully',
-            'user' => $user
+            'message' => 'Usuario creado correctamente.',
+            'user' => $user,
         ], 201);
     }
 
-    /**
-     * Update user
-     */
     public function update(Request $request, User $user)
     {
-        $admin = $request->user();
-        
-        if (!$admin->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
-            'email' => 'sometimes|string|email|max:255|unique:users,email,' . $user->id,
+            'email' => 'sometimes|string|email|max:255|unique:users,email,'.$user->id,
             'password' => 'sometimes|string|min:8|confirmed',
             'role' => 'sometimes|in:admin,instructor,student',
             'avatar' => 'nullable|url',
@@ -214,345 +221,157 @@ class AdminController extends Controller
 
         $user->update($validated);
 
+        AdminActivityLog::record($request->user(), 'user.updated', $user);
+
         return response()->json([
-            'message' => 'User updated successfully',
-            'user' => $user->fresh()
+            'message' => 'Usuario actualizado correctamente.',
+            'user' => $user->fresh(),
         ]);
     }
 
-    /**
-     * Update user role
-     */
     public function updateRole(Request $request, User $user)
     {
-        $admin = $request->user();
-        
-        if (!$admin->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
         $validated = $request->validate([
-            'role' => 'required|in:admin,instructor,student'
+            'role' => 'required|in:admin,instructor,student',
         ]);
 
         $user->update(['role' => $validated['role']]);
 
+        AdminActivityLog::record($request->user(), 'user.role_updated', $user, [
+            'role' => $validated['role'],
+        ]);
+
         return response()->json([
-            'message' => 'User role updated successfully',
-            'user' => $user->fresh()
+            'message' => 'Rol actualizado correctamente.',
+            'user' => $user->fresh(),
         ]);
     }
 
-    /**
-     * Update user status (email verification)
-     */
     public function updateStatus(Request $request, User $user)
     {
-        $admin = $request->user();
-        
-        if (!$admin->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
         $validated = $request->validate([
-            'status' => 'required|in:verified,pending,banned'
+            'status' => 'required|in:verified,pending',
         ]);
 
-        if ($validated['status'] === 'verified') {
-            $user->update(['email_verified_at' => now()]);
-        } elseif ($validated['status'] === 'pending') {
-            $user->update(['email_verified_at' => null]);
-        } elseif ($validated['status'] === 'banned') {
-            $user->update(['banned_at' => now()]);
-        }
+        $user->update([
+            'email_verified_at' => $validated['status'] === 'verified' ? now() : null,
+        ]);
+
+        AdminActivityLog::record($request->user(), 'user.status_updated', $user, [
+            'status' => $validated['status'],
+        ]);
 
         return response()->json([
-            'message' => 'User status updated successfully',
-            'user' => $user->fresh()
+            'message' => 'Estado actualizado correctamente.',
+            'user' => $user->fresh(),
         ]);
     }
 
-    /**
-     * Delete user
-     */
     public function destroy(Request $request, User $user)
     {
-        $admin = $request->user();
-        
-        if (!$admin->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
+        if ($user->id === $request->user()->id) {
+            return response()->json(['message' => 'No puedes eliminar tu propia cuenta.'], 422);
         }
 
-        // Prevent self-deletion
-        if ($user->id === $admin->id) {
-            return response()->json(['error' => 'Cannot delete your own account'], 400);
-        }
-
+        AdminActivityLog::record($request->user(), 'user.deleted', $user);
         $user->delete();
 
-        return response()->json([
-            'message' => 'User deleted successfully'
-        ]);
+        return response()->json(['message' => 'Usuario eliminado correctamente.']);
     }
 
-    /**
-     * Get all courses (admin view)
-     */
-    public function courses(Request $request)
-    {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
-        $query = Course::with(['instructor:id,name,email', 'category:id,name']);
-
-        // Search filter
-        if ($request->has('search')) {
-            $search = $request->input('search');
-            $query->where(function ($q) use ($search) {
-                $q->where('title', 'like', "%{$search}%")
-                  ->orWhere('description', 'like', "%{$search}%");
-            });
-        }
-
-        // Status filter
-        if ($request->has('status')) {
-            if ($request->input('status') === 'published') {
-                $query->where('is_published', true);
-            } elseif ($request->input('status') === 'draft') {
-                $query->where('is_published', false);
-            }
-        }
-
-        // Category filter
-        if ($request->has('category_id')) {
-            $query->where('category_id', $request->input('category_id'));
-        }
-
-        // Sorting
-        $sortField = $request->input('sort_by', 'created_at');
-        $sortDirection = $request->input('sort_dir', 'desc');
-        $query->orderBy($sortField, $sortDirection);
-
-        // Pagination
-        $perPage = $request->input('per_page', 15);
-        $courses = $query->paginate($perPage);
-
-        return response()->json([
-            'data' => $courses->items(),
-            'meta' => [
-                'total' => $courses->total(),
-                'per_page' => $courses->perPage(),
-                'current_page' => $courses->currentPage(),
-                'last_page' => $courses->lastPage(),
-            ]
-        ]);
-    }
-
-    /**
-     * Get course details (admin view)
-     */
-    public function showCourse(Request $request, Course $course)
-    {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
-        $course->load([
-            'instructor:id,name,email',
-            'category:id,name',
-            'modules.lessons',
-            'users' => function ($query) {
-                $query->limit(10);
-            },
-            'reviews' => function ($query) {
-                $query->with('user:id,name')->latest()->limit(10);
-            }
-        ]);
-
-        // Add enrollment count
-        $course->enrollments_count = $course->users()->count();
-        $course->completion_rate = $course->users()->wherePivot('completed', true)->count();
-
-        return response()->json($course);
-    }
-
-    /**
-     * Delete course (admin only)
-     */
     public function destroyCourse(Request $request, Course $course)
     {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
+        AdminActivityLog::record($request->user(), 'course.deleted', $course);
         $course->delete();
 
-        return response()->json([
-            'message' => 'Course deleted successfully'
-        ]);
+        return response()->json(['message' => 'Curso eliminado correctamente.']);
     }
 
-    /**
-     * Get system information
-     */
-    public function systemInfo(Request $request)
+    public function systemInfo()
     {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-
-        // Basic PHP info
-        $phpVersion = phpversion();
-        $laravelVersion = app()->version();
-        
-        // Database info
-        $dbName = DB::connection()->getDatabaseName();
-        $dbSize = $this->getDatabaseSize();
-        
-        // Server info
-        $serverSoftware = $_SERVER['SERVER_SOFTWARE'] ?? 'Unknown';
-        $serverProtocol = $_SERVER['SERVER_PROTOCOL'] ?? 'Unknown';
-        
-        // Memory usage
-        $memoryUsage = memory_get_usage(true);
-        $memoryPeak = memory_get_peak_usage(true);
-        
-        // Storage info
         $storagePath = storage_path();
-        $storageFree = disk_free_space($storagePath);
-        $storageTotal = disk_total_space($storagePath);
-        
-        // Active users/sessions
-        $activeSessions = GameSession::where('updated_at', '>=', Carbon::now()->subMinutes(30))->count();
-        $activeUsers = User::where('last_login_at', '>=', Carbon::now()->subHours(1))->count();
+        $storageFree = @disk_free_space($storagePath) ?: 0;
+        $storageTotal = @disk_total_space($storagePath) ?: 0;
 
         return response()->json([
             'php' => [
-                'version' => $phpVersion,
-                'laravel_version' => $laravelVersion,
-                'memory_usage' => $this->formatBytes($memoryUsage),
-                'memory_peak' => $this->formatBytes($memoryPeak),
+                'version' => phpversion(),
+                'laravel_version' => app()->version(),
+                'memory_usage' => $this->formatBytes(memory_get_usage(true)),
+                'memory_peak' => $this->formatBytes(memory_get_peak_usage(true)),
             ],
             'database' => [
-                'name' => $dbName,
-                'size' => $dbSize,
-                'tables' => $this->getTableCounts(),
+                'name' => DB::connection()->getDatabaseName(),
+                'size' => $this->getDatabaseSize(),
+                'tables' => [
+                    'users' => User::query()->count(),
+                    'courses' => Course::query()->count(),
+                    'payments' => Payment::query()->count(),
+                    'payouts' => Payout::query()->count(),
+                    'badges' => Badge::query()->count(),
+                    'rewards' => ShopItem::query()->count(),
+                ],
             ],
             'server' => [
-                'software' => $serverSoftware,
-                'protocol' => $serverProtocol,
                 'timezone' => config('app.timezone'),
                 'environment' => config('app.env'),
+                'server_software' => $_SERVER['SERVER_SOFTWARE'] ?? 'Unknown',
             ],
             'storage' => [
                 'free' => $this->formatBytes($storageFree),
                 'total' => $this->formatBytes($storageTotal),
-                'used_percentage' => $storageTotal > 0 ? round(($storageTotal - $storageFree) / $storageTotal * 100, 2) : 0,
+                'used_percentage' => $storageTotal > 0 ? round((($storageTotal - $storageFree) / $storageTotal) * 100, 2) : 0,
             ],
             'activity' => [
-                'active_sessions' => $activeSessions,
-                'active_users' => $activeUsers,
-                'total_requests' => $this->getRequestCount(),
-            ]
+                'active_sessions' => GameSession::query()->where('updated_at', '>=', Carbon::now()->subMinutes(30))->count(),
+                'active_users' => User::query()->where('last_active_at', '>=', Carbon::now()->subHours(1))->count(),
+            ],
         ]);
     }
 
-    /**
-     * Get activity logs
-     */
     public function activityLogs(Request $request)
     {
-        $user = $request->user();
-        
-        if (!$user->isAdmin()) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
+        $logs = AdminActivityLog::query()
+            ->with('actor:id,name,email')
+            ->latest()
+            ->paginate($request->integer('per_page', 25));
 
-        // TODO: Implement proper activity logging system
-        // For now, return basic logs from various models
-        
-        $logs = [
-            'recent_logins' => User::whereNotNull('last_login_at')
-                ->orderBy('last_login_at', 'desc')
-                ->take(20)
-                ->get(['id', 'name', 'email', 'last_login_at']),
-            'recent_payments' => Payment::with('user:id,name', 'course:id,title')
-                ->latest()
-                ->take(20)
-                ->get(),
-            'recent_course_creations' => Course::with('instructor:id,name')
-                ->latest()
-                ->take(20)
-                ->get(['id', 'title', 'instructor_id', 'created_at']),
-        ];
-
-        return response()->json($logs);
+        return response()->json([
+            'data' => $logs->items(),
+            'meta' => [
+                'total' => $logs->total(),
+                'per_page' => $logs->perPage(),
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+            ],
+        ]);
     }
 
-    /**
-     * Helper: Get database size
-     */
-    private function getDatabaseSize()
+    private function getDatabaseSize(): string
     {
         try {
             $dbName = DB::connection()->getDatabaseName();
-            $result = DB::select("SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) as size_mb 
-                FROM information_schema.TABLES 
-                WHERE table_schema = ?", [$dbName]);
-            
-            return isset($result[0]->size_mb) ? $result[0]->size_mb . ' MB' : 'Unknown';
-        } catch (\Exception $e) {
+            $result = DB::select(
+                'SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) as size_mb
+                FROM information_schema.TABLES
+                WHERE table_schema = ?',
+                [$dbName]
+            );
+
+            return isset($result[0]->size_mb) ? $result[0]->size_mb.' MB' : 'Unknown';
+        } catch (\Throwable) {
             return 'Unknown';
         }
     }
 
-    /**
-     * Helper: Get table counts
-     */
-    private function getTableCounts()
-    {
-        $tables = [
-            'users' => User::count(),
-            'courses' => Course::count(),
-            'categories' => Category::count(),
-            'payments' => Payment::count(),
-            'game_sessions' => GameSession::count(),
-        ];
-        
-        return $tables;
-    }
-
-    /**
-     * Helper: Get request count (simplified)
-     */
-    private function getRequestCount()
-    {
-        // TODO: Implement proper request counting
-        return 'N/A';
-    }
-
-    /**
-     * Helper: Format bytes to human readable
-     */
-    private function formatBytes($bytes, $precision = 2)
+    private function formatBytes(float|int $bytes, int $precision = 2): string
     {
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        
         $bytes = max($bytes, 0);
         $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
         $pow = min($pow, count($units) - 1);
-        
         $bytes /= pow(1024, $pow);
-        
-        return round($bytes, $precision) . ' ' . $units[$pow];
+
+        return round($bytes, $precision).' '.$units[$pow];
     }
 }

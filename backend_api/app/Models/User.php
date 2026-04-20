@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use App\Models\PlatformSetting;
 
 class User extends Authenticatable
 {
@@ -108,6 +109,21 @@ class User extends Authenticatable
         return $this->hasMany(Purchase::class);
     }
 
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
+    }
+
+    public function payouts()
+    {
+        return $this->hasMany(Payout::class, 'instructor_id');
+    }
+
+    public function approvedPayouts()
+    {
+        return $this->hasMany(Payout::class, 'approved_by');
+    }
+
     public function comments()
     {
         return $this->hasMany(Comment::class);
@@ -127,7 +143,17 @@ class User extends Authenticatable
 
     public function getCurrentLevelAttribute(): int
     {
-        return (int) floor(($this->total_points ?? 0) / 250) + 1;
+        $points = (int) ($this->total_points ?? 0);
+        $curve = PlatformSetting::getValue('gamification.levels', PlatformSetting::defaultLevelCurve());
+        $currentLevel = 1;
+
+        foreach ((array) $curve as $row) {
+            if ($points >= (int) ($row['xp_required'] ?? 0)) {
+                $currentLevel = max($currentLevel, (int) ($row['level'] ?? 1));
+            }
+        }
+
+        return $currentLevel;
     }
 
     public function getEarnedCoinsAttribute(): int
@@ -149,11 +175,10 @@ class User extends Authenticatable
 
     public function getLevelTitleAttribute(): string
     {
-        return match (true) {
-            $this->current_level >= 12 => 'Maestro',
-            $this->current_level >= 7 => 'Veterano',
-            $this->current_level >= 4 => 'Explorador',
-            default => 'Aprendiz',
-        };
+        $curve = PlatformSetting::getValue('gamification.levels', PlatformSetting::defaultLevelCurve());
+        $currentRow = collect((array) $curve)
+            ->firstWhere('level', $this->current_level);
+
+        return $currentRow['title'] ?? 'Aprendiz';
     }
 }

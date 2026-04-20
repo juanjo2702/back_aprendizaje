@@ -103,8 +103,16 @@ class InstructorContentController extends Controller
         $this->authorizeCourseOwnerOrAdmin($request, $lesson->module->course);
 
         $validated = $this->validateLessonPayload($request, false);
+        if (array_key_exists('module_id', $validated) && (int) $validated['module_id'] !== (int) $lesson->module_id) {
+            $targetModule = Module::query()->findOrFail($validated['module_id']);
+
+            if ((int) $targetModule->course_id !== (int) $lesson->module->course_id) {
+                abort(422, 'La lección solo puede moverse a un módulo del mismo curso.');
+            }
+        }
 
         $lesson->update(array_filter([
+            'module_id' => $validated['module_id'] ?? $lesson->module_id,
             'title' => $validated['title'] ?? $lesson->title,
             'type' => $validated['type'] ?? $lesson->type,
             'duration' => $validated['duration'] ?? $lesson->duration,
@@ -135,6 +143,7 @@ class InstructorContentController extends Controller
         $required = $isCreate ? 'required' : 'sometimes';
 
         return $request->validate([
+            'module_id' => 'nullable|integer|exists:modules,id',
             'title' => "{$required}|string|max:255",
             'type' => "{$required}|in:video,reading,resource,interactive",
             'duration' => 'nullable|integer|min:0|max:86400',
