@@ -71,8 +71,51 @@ class CertificateController extends Controller
         }
 
         // Verificar puntaje mínimo en evaluaciones (si aplica)
-        if ($course->certificate_min_score > 0) {
-            // Calcular promedio de quizzes del curso
+        if ($course->certificate_requires_final_exam) {
+            $examScope = $course->certificate_exam_scope ?? 'lesson';
+
+            if ($examScope === 'course') {
+                // Calcular promedio de TODAS las actividades interactivas del curso
+                $courseScore = $this->calculateAllActivitiesAverage($user, $course);
+
+                if ($courseScore < $course->certificate_min_score) {
+                    return response()->json([
+                        'message' => 'Debes aprobar las actividades de todo el curso para obtener el certificado.',
+                        'current_score' => round($courseScore, 2),
+                        'required_score' => $course->certificate_min_score,
+                    ], 422);
+                }
+            } else {
+                // Scope 'lesson': verificar lección específica
+                $finalExamLesson = $course->certificateFinalLesson()->first();
+
+                if (! $finalExamLesson) {
+                    return response()->json([
+                        'message' => 'El docente todavía no configuró el examen final de certificación.',
+                    ], 422);
+                }
+
+                $finalExamResult = \App\Models\InteractiveActivityResult::query()
+                    ->where('user_id', $user->id)
+                    ->where('course_id', $course->id)
+                    ->where('lesson_id', $finalExamLesson->id)
+                    ->latest('last_attempt_at')
+                    ->first();
+
+                $finalExamScore = $finalExamResult
+                    ? (((float) $finalExamResult->score / max(1, (float) $finalExamResult->max_score)) * 100)
+                    : 0;
+
+                if (! $finalExamResult || $finalExamResult->status !== 'completed' || $finalExamScore < $course->certificate_min_score) {
+                    return response()->json([
+                        'message' => "Debes aprobar el examen final \"{$finalExamLesson->title}\" para obtener el certificado.",
+                        'current_score' => round($finalExamScore, 2),
+                        'required_score' => $course->certificate_min_score,
+                    ], 422);
+                }
+            }
+        } elseif ($course->certificate_min_score > 0) {
+            // Sin examen final requerido: calcular promedio general del curso
             $avgScore = $this->calculateCourseAverage($user, $course);
 
             if ($avgScore < $course->certificate_min_score) {
@@ -239,6 +282,29 @@ class CertificateController extends Controller
             'certificate' => $certificate,
             'download_url' => '#', // URL simulada
         ]);
+    }
+
+    /**
+     * Calcular promedio de TODAS las actividades interactivas del curso.
+     */
+    private function calculateAllActivitiesAverage(User $user, Course $course): float
+    {
+        $results = \App\Models\InteractiveActivityResult::query()
+            ->where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('status', 'completed')
+            ->get();
+
+        if ($results->isEmpty()) {
+            return 0.0;
+        }
+
+        $totalPercentage = $results->sum(function ($result) {
+            $maxScore = max(1, (float) $result->max_score);
+            return ((float) $result->score / $maxScore) * 100;
+        });
+
+        return $totalPercentage / $results->count();
     }
 
     /**

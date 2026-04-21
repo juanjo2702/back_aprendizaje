@@ -10,7 +10,9 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->resetScenarioTables();
+        if (filter_var(env('RESET_SCENARIO_ON_SEED', false), FILTER_VALIDATE_BOOL)) {
+            $this->resetScenarioTables();
+        }
 
         $this->call([
             GameTypeSeeder::class,

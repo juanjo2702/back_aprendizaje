@@ -252,6 +252,11 @@ class InstructorContentController extends Controller
         if ($type === 'resource') {
             $resourceUploadToken = $payload['resource_upload_token'] ?? null;
             $resourceUrl = $payload['content_url'] ?? $lesson->content_url ?? 'https://example.com/recurso.pdf';
+            $resourceDescription = trim((string) ($payload['content_text'] ?? $lesson->content_text ?? ''));
+            $resourceMetadata = array_filter([
+                ...($metadata ?? []),
+                'description' => $resourceDescription !== '' ? $resourceDescription : null,
+            ], static fn ($value) => $value !== null);
 
             $resource = LessonResource::updateOrCreate(
                 ['lesson_id' => $lesson->id],
@@ -262,7 +267,7 @@ class InstructorContentController extends Controller
                     'mime_type' => 'application/pdf',
                     'file_size_bytes' => 0,
                     'is_downloadable' => true,
-                    'metadata' => $metadata,
+                    'metadata' => $resourceMetadata ?: null,
                 ]
             );
 
@@ -285,7 +290,7 @@ class InstructorContentController extends Controller
                     'file_url' => $resource->signedDownloadUrl(),
                     'mime_type' => $manifest['mime_type'],
                     'file_size_bytes' => $manifest['size'],
-                    'metadata' => array_merge($metadata ?? [], [
+                    'metadata' => array_merge($resourceMetadata, [
                         'upload_token' => $resourceUploadToken,
                         'mime_type' => $manifest['mime_type'],
                         'file_size_bytes' => $manifest['size'],
@@ -300,7 +305,7 @@ class InstructorContentController extends Controller
                 'contentable_type' => LessonResource::class,
                 'contentable_id' => $resource->id,
                 'content_url' => $resource->signedDownloadUrl() ?? $resource->file_url,
-                'content_text' => null,
+                'content_text' => $resourceDescription !== '' ? $resourceDescription : null,
             ]);
 
             return;

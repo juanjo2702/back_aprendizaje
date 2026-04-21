@@ -120,7 +120,9 @@ class CourseController extends Controller
             ->with([
                 'instructor:id,name,avatar,bio',
                 'category:id,name,slug',
-                'modules.lessons:id,module_id,title,type,duration,sort_order,is_free,content_url',
+                'modules.lessons:id,module_id,title,type,duration,sort_order,is_free,content_url,content_text',
+                'certificateFinalLesson:id,module_id,title,type',
+                'certificateFinalLesson.module:id,title',
                 'shopItems:id,course_id,lesson_id,name,slug,type,cost_coins,minimum_level_required,metadata,is_active',
             ])
             ->withCount('enrollments as total_students');
@@ -297,6 +299,9 @@ class CourseController extends Controller
             'requirements' => 'nullable|array',
             'what_you_learn' => 'nullable|array',
             'has_certificate' => 'sometimes|boolean',
+            'certificate_requires_final_exam' => 'sometimes|boolean',
+            'certificate_final_lesson_id' => 'nullable|integer|exists:lessons,id',
+            'certificate_exam_scope' => 'sometimes|in:lesson,course',
             'certificate_min_score' => 'nullable|integer|min:0|max:100',
         ]);
 
@@ -304,6 +309,9 @@ class CourseController extends Controller
         $validated['instructor_id'] = $request->user()->id;
         $validated['status'] = $validated['status'] ?? 'draft';
         $validated['minimum_level_required'] = max(1, (int) ($validated['minimum_level_required'] ?? 1));
+        $validated['certificate_requires_final_exam'] = (bool) ($validated['certificate_requires_final_exam'] ?? false);
+        $validated['certificate_exam_scope'] = $validated['certificate_exam_scope'] ?? 'lesson';
+        $validated['certificate_final_lesson_id'] = null;
 
         $course = Course::create($validated);
 
@@ -330,11 +338,32 @@ class CourseController extends Controller
             'requirements' => 'nullable|array',
             'what_you_learn' => 'nullable|array',
             'has_certificate' => 'sometimes|boolean',
+            'certificate_requires_final_exam' => 'sometimes|boolean',
+            'certificate_final_lesson_id' => 'nullable|integer|exists:lessons,id',
+            'certificate_exam_scope' => 'sometimes|in:lesson,course',
             'certificate_min_score' => 'nullable|integer|min:0|max:100',
         ]);
 
         if (array_key_exists('minimum_level_required', $validated)) {
             $validated['minimum_level_required'] = max(1, (int) ($validated['minimum_level_required'] ?? 1));
+        }
+
+        // When scope is 'course', clear the specific lesson reference
+        $scope = $validated['certificate_exam_scope'] ?? $course->certificate_exam_scope ?? 'lesson';
+        if ($scope === 'course') {
+            $validated['certificate_final_lesson_id'] = null;
+        } elseif (array_key_exists('certificate_final_lesson_id', $validated)) {
+            $this->assertCertificateFinalLessonBelongsToCourse($course, $validated['certificate_final_lesson_id']);
+        }
+
+        if (array_key_exists('has_certificate', $validated) && ! $validated['has_certificate']) {
+            $validated['certificate_requires_final_exam'] = false;
+            $validated['certificate_final_lesson_id'] = null;
+        }
+
+        if (array_key_exists('certificate_requires_final_exam', $validated) && ! $validated['certificate_requires_final_exam']) {
+            $validated['certificate_final_lesson_id'] = null;
+            $validated['certificate_exam_scope'] = 'lesson';
         }
 
         $course->update($validated);
@@ -361,6 +390,23 @@ class CourseController extends Controller
         $user = $request->user();
         if ($user->id !== $course->instructor_id && ! $user->isAdmin()) {
             abort(403, 'No tienes permiso para realizar esta acción.');
+        }
+    }
+
+    private function assertCertificateFinalLessonBelongsToCourse(Course $course, ?int $lessonId): void
+    {
+        if (! $lessonId) {
+            return;
+        }
+
+        $lesson = $course->lessons()->find($lessonId);
+
+        if (! $lesson) {
+            abort(422, 'La evaluación final debe pertenecer al mismo curso.');
+        }
+
+        if ($lesson->normalized_type !== 'interactive') {
+            abort(422, 'La evaluación final debe ser una lección de tipo actividad.');
         }
     }
 }

@@ -30,6 +30,9 @@ class Course extends Model
         'requirements',
         'what_you_learn',
         'has_certificate',
+        'certificate_requires_final_exam',
+        'certificate_final_lesson_id',
+        'certificate_exam_scope',
         'certificate_min_score',
         'minimum_level_required',
     ];
@@ -41,6 +44,9 @@ class Course extends Model
             'requirements' => 'array',
             'what_you_learn' => 'array',
             'has_certificate' => 'boolean',
+            'certificate_requires_final_exam' => 'boolean',
+            'certificate_final_lesson_id' => 'integer',
+            'certificate_exam_scope' => 'string',
             'certificate_min_score' => 'integer',
             'minimum_level_required' => 'integer',
             'submitted_for_review_at' => 'datetime',
@@ -120,6 +126,11 @@ class Course extends Model
     public function certificates()
     {
         return $this->hasMany(Certificate::class);
+    }
+
+    public function certificateFinalLesson()
+    {
+        return $this->belongsTo(Lesson::class, 'certificate_final_lesson_id');
     }
 
     public function shopItems()

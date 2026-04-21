@@ -292,10 +292,22 @@ class UserProgressController extends Controller
         // Verificar si califica para certificado
         $qualifiesForCertificate = false;
         $certificateMessage = null;
+        $finalExam = $this->resolveCertificateFinalExam($user, $course);
 
         if ($course->has_certificate) {
             if ($enrollment->progress >= 100) {
-                if ($course->certificate_min_score > 0) {
+                if ($course->certificate_requires_final_exam) {
+                    if (! $finalExam['lesson']) {
+                        $certificateMessage = 'El docente todavía no configuró la evaluación final para este certificado.';
+                    } elseif (! $finalExam['result']) {
+                        $certificateMessage = "Debes aprobar el examen final \"{$finalExam['lesson']->title}\" para obtener el certificado.";
+                    } else {
+                        $qualifiesForCertificate = $finalExam['passed'];
+                        $certificateMessage = $qualifiesForCertificate
+                            ? "Aprobaste el examen final \"{$finalExam['lesson']->title}\" y ya calificas para el certificado."
+                            : "Necesitas {$course->certificate_min_score}% en el examen final \"{$finalExam['lesson']->title}\". Tu mejor puntaje actual es ".round($finalExam['score_percentage'], 2).'%.';
+                    }
+                } elseif ($course->certificate_min_score > 0) {
                     $avgScore = $this->calculateCourseAverage($user, $course);
                     $qualifiesForCertificate = $avgScore >= $course->certificate_min_score;
                     $certificateMessage = $qualifiesForCertificate
@@ -342,6 +354,21 @@ class UserProgressController extends Controller
                 'available' => $course->has_certificate,
                 'qualifies' => $qualifiesForCertificate,
                 'message' => $certificateMessage,
+                'requires_final_exam' => (bool) $course->certificate_requires_final_exam,
+                'required_score' => (int) $course->certificate_min_score,
+                'final_exam' => [
+                    'lesson' => $finalExam['lesson'] ? [
+                        'id' => $finalExam['lesson']->id,
+                        'title' => $finalExam['lesson']->title,
+                        'module_title' => $finalExam['lesson']->module?->title,
+                    ] : null,
+                    'result' => $finalExam['result'] ? [
+                        'status' => $finalExam['result']->status,
+                        'attempts_used' => (int) $finalExam['result']->attempts_used,
+                        'score_percentage' => round($finalExam['score_percentage'], 2),
+                        'completed_at' => $finalExam['result']->completed_at,
+                    ] : null,
+                ],
                 'existing' => Certificate::where('user_id', $user->id)->where('course_id', $course->id)->first(),
             ],
         ]);
@@ -457,5 +484,37 @@ class UserProgressController extends Controller
             ->avg('percentage');
 
         return $avg ? (float) $avg : 0.0;
+    }
+
+    private function resolveCertificateFinalExam(User $user, Course $course): array
+    {
+        $lesson = $course->certificateFinalLesson()
+            ->with('module:id,title')
+            ->first();
+
+        $result = null;
+        $scorePercentage = null;
+        $passed = false;
+
+        if ($lesson) {
+            $result = InteractiveActivityResult::query()
+                ->where('user_id', $user->id)
+                ->where('course_id', $course->id)
+                ->where('lesson_id', $lesson->id)
+                ->latest('last_attempt_at')
+                ->first();
+
+            if ($result) {
+                $scorePercentage = ((float) $result->score / max(1, (float) $result->max_score)) * 100;
+                $passed = $result->status === 'completed' && $scorePercentage >= (int) $course->certificate_min_score;
+            }
+        }
+
+        return [
+            'lesson' => $lesson,
+            'result' => $result,
+            'score_percentage' => $scorePercentage,
+            'passed' => $passed,
+        ];
     }
 }

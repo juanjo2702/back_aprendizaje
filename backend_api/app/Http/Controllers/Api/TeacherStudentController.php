@@ -352,16 +352,20 @@ class TeacherStudentController extends Controller
                     fn ($morphQuery) => $morphQuery->whereHas('lesson.module', fn ($moduleQuery) => $moduleQuery->whereIn('course_id', $managedCourseIds))
                 );
             })
-            ->with('user:id,name,avatar', 'replies')
+            ->with('user:id,name,avatar', 'replies', 'commentable')
             ->latest()
             ->limit(6)
             ->get()
             ->map(function (Comment $comment) {
+                $context = $this->resolveCommentContext($comment);
+
                 return [
                     'id' => $comment->id,
                     'type' => 'question',
                     'message' => $comment->body,
                     'student_name' => $comment->user?->name,
+                    'course_title' => $context['course_title'],
+                    'lesson_title' => $context['lesson_title'],
                     'created_at' => $comment->created_at,
                     'reply_count' => $comment->replies->count(),
                 ];
@@ -435,6 +439,36 @@ class TeacherStudentController extends Controller
             },
             'days_inactive' => $daysInactive,
             'failed_activities_count' => $failedActivitiesCount,
+        ];
+    }
+
+    private function resolveCommentContext(Comment $comment): array
+    {
+        $commentable = $comment->commentable;
+
+        if ($commentable instanceof InteractiveConfig) {
+            $commentable->loadMissing(['course:id,title', 'lesson:id,title']);
+
+            return [
+                'course_title' => $commentable->course?->title,
+                'lesson_title' => $commentable->lesson?->title,
+            ];
+        }
+
+        if ($commentable && method_exists($commentable, 'lesson')) {
+            $lesson = $commentable->relationLoaded('lesson')
+                ? $commentable->lesson
+                : $commentable->lesson()->with('module.course:id,title')->first();
+
+            return [
+                'course_title' => $lesson?->module?->course?->title,
+                'lesson_title' => $lesson?->title,
+            ];
+        }
+
+        return [
+            'course_title' => null,
+            'lesson_title' => null,
         ];
     }
 }

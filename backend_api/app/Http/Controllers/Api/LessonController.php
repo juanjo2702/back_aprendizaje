@@ -348,6 +348,7 @@ class LessonController extends Controller
                 'payload' => [
                     'file_name' => $contentable?->file_name,
                     'file_url' => $contentable?->signedDownloadUrl() ?? $contentable?->file_url ?? $lesson->content_url,
+                    'description' => $contentable?->metadata['description'] ?? $lesson->content_text,
                     'mime_type' => $contentable?->mime_type,
                     'file_size_bytes' => $contentable?->file_size_bytes,
                     'is_downloadable' => (bool) ($contentable?->is_downloadable ?? true),
