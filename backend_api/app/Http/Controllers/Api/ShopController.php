@@ -5,15 +5,27 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Purchase;
 use App\Models\ShopItem;
+use App\Models\UserCoupon;
+use App\Models\UserItem;
+use App\Services\UserPresentationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class ShopController extends Controller
 {
+    public function __construct(
+        private readonly UserPresentationService $userPresentationService
+    ) {
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
+        $ownedItems = $user->userItems()
+            ->selectRaw('shop_item_id, COUNT(*) as total_owned')
+            ->groupBy('shop_item_id')
+            ->pluck('total_owned', 'shop_item_id');
 
         $items = ShopItem::query()
             ->with(['course:id,title,slug', 'lesson:id,title,module_id', 'lesson.module:id,course_id,title'])
@@ -21,11 +33,8 @@ class ShopController extends Controller
             ->when($request->filled('type'), fn ($query) => $query->where('type', $request->string('type')))
             ->orderBy('cost_coins')
             ->get()
-            ->map(function (ShopItem $item) use ($user) {
-                $purchasesCount = $item->purchases()
-                    ->where('user_id', $user->id)
-                    ->whereIn('status', ['completed', 'consumed'])
-                    ->count();
+            ->map(function (ShopItem $item) use ($user, $ownedItems) {
+                $ownedCount = (int) ($ownedItems[$item->id] ?? 0);
 
                 return [
                     'id' => $item->id,
@@ -43,8 +52,8 @@ class ShopController extends Controller
                         'title' => $item->lesson->title,
                         'module_title' => $item->lesson->module?->title,
                     ] : null,
-                    'already_owned' => $purchasesCount > 0 && in_array($item->type, ['avatar_frame', 'profile_title', 'premium_content'], true),
-                    'owned_count' => $purchasesCount,
+                    'already_owned' => $ownedCount > 0 && in_array($item->type, ['avatar_frame', 'profile_title', 'premium_content'], true),
+                    'owned_count' => $ownedCount,
                     'can_afford' => $user->available_coins >= $item->cost_coins,
                     'locked_by_level' => $user->current_level < $item->minimum_level_required,
                 ];
@@ -62,7 +71,7 @@ class ShopController extends Controller
         $user = $request->user();
 
         $purchases = $user->purchases()
-            ->with(['shopItem.course:id,title,slug', 'shopItem.lesson:id,title'])
+            ->with(['shopItem.course:id,title,slug', 'shopItem.lesson:id,title', 'userItem.coupon'])
             ->latest('purchased_at')
             ->paginate($request->integer('per_page', 20));
 
@@ -97,17 +106,16 @@ class ShopController extends Controller
             return response()->json(['message' => 'Este artículo ya agotó su stock.'], 422);
         }
 
-        $alreadyOwned = Purchase::query()
+        $alreadyOwned = UserItem::query()
             ->where('user_id', $user->id)
             ->where('shop_item_id', $shopItem->id)
-            ->whereIn('status', ['completed', 'consumed'])
             ->exists();
 
         if ($alreadyOwned && in_array($shopItem->type, ['avatar_frame', 'profile_title', 'premium_content'], true)) {
             return response()->json(['message' => 'Ya posees este artículo.'], 422);
         }
 
-        $purchase = DB::transaction(function () use ($user, $shopItem) {
+        $payload = DB::transaction(function () use ($user, $shopItem) {
             $metadata = match ($shopItem->type) {
                 'discount_coupon' => [
                     'coupon_code' => strtoupper(($shopItem->metadata['code_prefix'] ?? 'SAVE').'-'.Str::random(8)),
@@ -115,14 +123,17 @@ class ShopController extends Controller
                 ],
                 'profile_title' => [
                     'title' => $shopItem->metadata['title'] ?? $shopItem->name,
+                    'title_color' => $shopItem->metadata['title_color'] ?? null,
                 ],
                 'avatar_frame' => [
-                    'frame_style' => $shopItem->metadata['frame_style'] ?? 'default-frame',
+                    'frame_class' => $shopItem->metadata['frame_class'] ?? $shopItem->metadata['frame_style'] ?? 'frame-default',
+                    'frame_svg' => $shopItem->metadata['frame_svg'] ?? null,
+                    'accent_color' => $shopItem->metadata['accent_color'] ?? null,
                 ],
                 default => $shopItem->metadata ?? [],
             };
 
-            return Purchase::create([
+            $purchase = Purchase::create([
                 'user_id' => $user->id,
                 'shop_item_id' => $shopItem->id,
                 'cost_coins' => $shopItem->cost_coins,
@@ -130,14 +141,47 @@ class ShopController extends Controller
                 'metadata' => $metadata,
                 'purchased_at' => now(),
             ]);
-        });
+            $user->decrement('total_coins', $shopItem->cost_coins);
 
-        $user->decrement('total_coins', $shopItem->cost_coins);
+            $userItem = UserItem::create([
+                'user_id' => $user->id,
+                'shop_item_id' => $shopItem->id,
+                'purchase_id' => $purchase->id,
+                'item_type' => $shopItem->type,
+                'metadata' => $metadata,
+                'acquired_at' => now(),
+            ]);
+
+            $coupon = null;
+
+            if ($shopItem->type === 'discount_coupon') {
+                $coupon = UserCoupon::create([
+                    'user_id' => $user->id,
+                    'shop_item_id' => $shopItem->id,
+                    'user_item_id' => $userItem->id,
+                    'code' => $metadata['coupon_code'],
+                    'discount_percent' => $metadata['discount_percent'],
+                    'metadata' => [
+                        'label' => $shopItem->name,
+                    ],
+                ]);
+            }
+
+            return [
+                'purchase' => $purchase,
+                'user_item' => $userItem,
+                'coupon' => $coupon,
+            ];
+        });
 
         return response()->json([
             'message' => 'Compra realizada correctamente.',
             'economy' => $this->economyPayload($user->fresh()),
-            'purchase' => $purchase->load('shopItem'),
+            'purchase' => $payload['purchase']->load(['shopItem', 'userItem.coupon']),
+            'inventory_item' => $this->userPresentationService->serializeInventoryItem(
+                $payload['user_item']->load('shopItem')
+            ),
+            'coupon' => $payload['coupon'],
         ], 201);
     }
 

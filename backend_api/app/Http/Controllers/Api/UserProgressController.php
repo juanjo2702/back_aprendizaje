@@ -330,7 +330,7 @@ class UserProgressController extends Controller
                 'total_lessons' => $totalLessons,
                 'completed_lessons' => $completedLessonsCount,
                 'percentage' => $progressSnapshot['overall_progress'],
-                'lessons_percentage' => $progressSnapshot['lessons']['progress'],
+                'lessons_percentage' => $progressSnapshot['videos']['progress'],
                 'interactive_percentage' => $progressSnapshot['interactive']['progress'],
             ],
             'quizzes' => [

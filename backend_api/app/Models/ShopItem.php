@@ -54,4 +54,14 @@ class ShopItem extends Model
     {
         return $this->hasMany(Purchase::class);
     }
+
+    public function userItems()
+    {
+        return $this->hasMany(UserItem::class);
+    }
+
+    public function userCoupons()
+    {
+        return $this->hasMany(UserCoupon::class);
+    }
 }

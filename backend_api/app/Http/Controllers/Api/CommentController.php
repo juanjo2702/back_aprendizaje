@@ -8,11 +8,17 @@ use App\Models\InteractiveConfig;
 use App\Models\LessonReading;
 use App\Models\LessonResource;
 use App\Models\LessonVideo;
+use App\Services\UserPresentationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 
 class CommentController extends Controller
 {
+    public function __construct(
+        private readonly UserPresentationService $userPresentationService
+    ) {
+    }
+
     public function index(Request $request)
     {
         $validated = $request->validate([
@@ -28,8 +34,10 @@ class CommentController extends Controller
             ->where('commentable_type', $commentable->getMorphClass())
             ->where('commentable_id', $commentable->getKey())
             ->with([
-                'user:id,name,avatar,role,total_points',
-                'replies.user:id,name,avatar,role,total_points',
+                'user:id,name,avatar,role,total_points,current_streak',
+                'user.equippedItems.shopItem',
+                'replies.user:id,name,avatar,role,total_points,current_streak',
+                'replies.user.equippedItems.shopItem',
             ])
             ->latest()
             ->get()
@@ -64,7 +72,7 @@ class CommentController extends Controller
             'is_question' => (bool) ($validated['is_question'] ?? true),
         ]);
 
-        $comment->load('user:id,name,avatar,role,total_points');
+        $comment->load('user:id,name,avatar,role,total_points,current_streak', 'user.equippedItems.shopItem');
 
         return response()->json([
             'message' => 'Comentario publicado correctamente.',
@@ -93,15 +101,22 @@ class CommentController extends Controller
             $comment->forceFill(['resolved_at' => now()])->save();
         }
 
-        $reply->load('user:id,name,avatar,role,total_points');
+        $reply->load('user:id,name,avatar,role,total_points,current_streak', 'user.equippedItems.shopItem');
         $comment->load([
-            'user:id,name,avatar,role,total_points',
-            'replies.user:id,name,avatar,role,total_points',
+            'user:id,name,avatar,role,total_points,current_streak',
+            'user.equippedItems.shopItem',
+            'replies.user:id,name,avatar,role,total_points,current_streak',
+            'replies.user.equippedItems.shopItem',
         ]);
 
         return response()->json([
             'message' => 'Respuesta enviada.',
-            'comment' => $this->serializeComment($comment->fresh(['user:id,name,avatar,role,total_points', 'replies.user:id,name,avatar,role,total_points'])),
+            'comment' => $this->serializeComment($comment->fresh([
+                'user:id,name,avatar,role,total_points,current_streak',
+                'user.equippedItems.shopItem',
+                'replies.user:id,name,avatar,role,total_points,current_streak',
+                'replies.user.equippedItems.shopItem',
+            ])),
             'reply' => $this->serializeComment($reply),
         ]);
     }
@@ -158,12 +173,18 @@ class CommentController extends Controller
             'resolved_at' => $comment->resolved_at,
             'created_at' => $comment->created_at,
             'author' => [
-                'id' => $comment->user?->id,
-                'name' => $comment->user?->name,
-                'avatar' => $comment->user?->avatar,
-                'role' => $comment->user?->role,
-                'level' => $comment->user?->current_level,
-                'level_title' => $comment->user?->level_title,
+                ...($comment->user
+                    ? $this->userPresentationService->commentAuthorPayload($comment->user)
+                    : [
+                        'id' => null,
+                        'name' => null,
+                        'avatar' => null,
+                        'role' => null,
+                        'level' => null,
+                        'level_title' => null,
+                        'equipped_avatar_frame' => null,
+                        'equipped_profile_title' => null,
+                    ]),
             ],
             'replies' => $comment->relationLoaded('replies')
                 ? $comment->replies->map(fn (Comment $reply) => $this->serializeComment($reply))->values()->all()

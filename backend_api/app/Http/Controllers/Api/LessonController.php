@@ -214,11 +214,18 @@ class LessonController extends Controller
             'time_spent_seconds' => 'nullable|integer|min:0|max:86400',
         ]);
 
+        if ($lesson->type !== 'video') {
+            return response()->json([
+                'message' => 'Solo las lecciones en video afectan el progreso del curso. Los documentos y recursos son de apoyo.',
+                'progress' => $progressService->recalculateEnrollmentProgress($user, $course),
+            ], 422);
+        }
+
         $progressService->markLessonCompleted($user, $lesson, $validated['time_spent_seconds'] ?? 0);
         $snapshot = $progressService->recalculateEnrollmentProgress($user, $course);
 
         return response()->json([
-            'message' => 'Lección marcada como completada.',
+            'message' => 'Video marcado como completado.',
             'progress' => $snapshot,
         ]);
     }

@@ -13,9 +13,11 @@ use App\Http\Controllers\Api\InstructorContentController;
 use App\Http\Controllers\Api\InteractiveConfigController;
 use App\Http\Controllers\Api\LessonController;
 use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\ProgressController;
 use App\Http\Controllers\Api\QuizController;
 use App\Http\Controllers\Api\ShopController;
 use App\Http\Controllers\Api\SocialAuthController;
+use App\Http\Controllers\Api\StudentInventoryController;
 use App\Http\Controllers\Api\TeacherStudentController;
 use App\Http\Controllers\Api\UserProgressController;
 use App\Http\Controllers\Api\AdminController;
@@ -49,10 +51,26 @@ Route::get('/courses/{slug}', [CourseController::class, 'show']);
 // Public categories
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/game-types', [GameTypeController::class, 'index']);
+Route::get('/users/{user}/mini-profile', [StudentInventoryController::class, 'miniProfile']);
 
 // Public certificate verification
 Route::post('/certificates/verify', [CertificateController::class, 'verify']);
+Route::get('/certificates/verify/{certificate_code}', [CertificateController::class, 'verifyByCode']);
 Route::post('/payments/webhook', [PaymentController::class, 'confirmMockPayment']);
+
+Route::get('/debug/inventory/{userId}', function ($userId) {
+    $user = \App\Models\User::find($userId);
+    $user->load([
+        'userItems.shopItem',
+        'userCoupons.shopItem',
+        'userCoupons.userItem',
+        'equippedItems.shopItem',
+    ]);
+    return response()->json([
+        'userItems' => $user->userItems,
+        'userCoupons' => $user->userCoupons,
+    ]);
+});
 
 // ─── Protected (Sanctum) ────────────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
@@ -93,6 +111,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard-stats', [UserProgressController::class, 'dashboardStats']);
         Route::get('/courses', [UserProgressController::class, 'userCourses']);
         Route::get('/courses/{course}/progress', [UserProgressController::class, 'courseProgress']);
+        Route::get('/progress/courses/{course}', [ProgressController::class, 'show']);
         Route::get('/recent-activity', [UserProgressController::class, 'recentActivity']);
     });
 
@@ -100,6 +119,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/shop/items', [ShopController::class, 'index'])->middleware('role:student');
     Route::get('/shop/purchases', [ShopController::class, 'purchases'])->middleware('role:student');
     Route::post('/shop/items/{shopItem}/purchase', [ShopController::class, 'purchase'])->middleware('role:student');
+    Route::get('/student/inventory', [StudentInventoryController::class, 'index'])->middleware('role:student');
+    Route::post('/student/inventory/equip', [StudentInventoryController::class, 'equip'])->middleware('role:student');
 
     // Game Configurations (teacher/admin authoring)
     Route::apiResource('game-configurations', GameConfigurationController::class)

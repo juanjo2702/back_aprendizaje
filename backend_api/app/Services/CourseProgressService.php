@@ -12,6 +12,12 @@ use Illuminate\Support\Facades\DB;
 
 class CourseProgressService
 {
+    public function __construct(
+        private readonly UserPresentationService $userPresentationService,
+        private readonly CertificateAutomationService $certificateAutomationService
+    ) {
+    }
+
     public function courseHasInteractiveActivities(Course $course): bool
     {
         return $course->lessons()
@@ -107,39 +113,37 @@ class CourseProgressService
 
     public function getProgressSnapshot(User $user, Course $course, bool $persistEnrollment = false): array
     {
-        $totalLessons = $course->lessons()->count();
+        $totalVideos = $course->lessons()
+            ->where('type', 'video')
+            ->count();
+
+        $totalActivities = $course->lessons()
+            ->whereIn('type', ['interactive', 'game', 'quiz'])
+            ->count();
+
+        $totalEligibleUnits = $totalVideos + $totalActivities;
+
         $completedLessons = UserLessonProgress::where('user_id', $user->id)
             ->where('course_id', $course->id)
             ->where('is_completed', true)
+            ->whereHas('lesson', fn ($query) => $query->where('type', 'video'))
             ->distinct('lesson_id')
             ->count('lesson_id');
 
-        $lessonsProgress = $totalLessons > 0 ? round(($completedLessons / $totalLessons) * 100, 2) : 0.0;
-        $hasInteractive = $this->courseHasInteractiveActivities($course);
+        $videoProgress = $totalVideos > 0 ? round(($completedLessons / $totalVideos) * 100, 2) : 100.0;
+        $completedInteractive = InteractiveActivityResult::where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('status', 'completed')
+            ->distinct('lesson_id')
+            ->count('lesson_id');
 
-        $interactiveLessons = 0;
-        $completedInteractive = 0;
-        $interactiveProgress = 0.0;
+        $interactiveProgress = $totalActivities > 0
+            ? round(($completedInteractive / $totalActivities) * 100, 2)
+            : 100.0;
 
-        if ($hasInteractive) {
-            $interactiveLessons = $course->lessons()
-                ->whereIn('type', ['interactive', 'game', 'quiz'])
-                ->count();
-
-            $completedInteractive = InteractiveActivityResult::where('user_id', $user->id)
-                ->where('course_id', $course->id)
-                ->where('status', 'completed')
-                ->distinct('lesson_id')
-                ->count('lesson_id');
-
-            $interactiveProgress = $interactiveLessons > 0
-                ? round(($completedInteractive / $interactiveLessons) * 100, 2)
-                : 100.0;
-        }
-
-        $overall = $hasInteractive
-            ? round(($lessonsProgress * 0.7) + ($interactiveProgress * 0.3), 2)
-            : $lessonsProgress;
+        $overall = $totalEligibleUnits > 0
+            ? round((($completedLessons + $completedInteractive) / $totalEligibleUnits) * 100, 2)
+            : 0.0;
 
         if ($persistEnrollment) {
             Enrollment::updateOrCreate(
@@ -151,19 +155,32 @@ class CourseProgressService
                     'progress' => $overall,
                 ]
             );
+
+            if ($overall >= 100) {
+                $this->certificateAutomationService->issueIfEligible($user, $course, $overall);
+            }
         }
 
         return [
-            'has_interactive_activities' => $hasInteractive,
+            'has_interactive_activities' => $totalActivities > 0,
+            'videos' => [
+                'completed' => $completedLessons,
+                'total' => $totalVideos,
+                'progress' => $videoProgress,
+            ],
             'lessons' => [
                 'completed' => $completedLessons,
-                'total' => $totalLessons,
-                'progress' => $lessonsProgress,
+                'total' => $totalVideos,
+                'progress' => $videoProgress,
             ],
             'interactive' => [
                 'completed' => $completedInteractive,
-                'total' => $interactiveLessons,
+                'total' => $totalActivities,
                 'progress' => $interactiveProgress,
+            ],
+            'resources' => [
+                'total' => $course->lessons()->whereIn('type', ['resource', 'reading', 'text'])->count(),
+                'count_towards_progress' => false,
             ],
             'overall_progress' => $overall,
         ];
@@ -187,12 +204,27 @@ class CourseProgressService
             ->limit($limit)
             ->get();
 
-        return $rows->map(function ($row, $index) {
+        $users = User::query()
+            ->whereIn('id', $rows->pluck('id')->all())
+            ->with('equippedItems.shopItem')
+            ->get()
+            ->keyBy('id');
+
+        return $rows->map(function ($row, $index) use ($users) {
+            $user = $users->get($row->id);
+
             return [
                 'rank' => $index + 1,
                 'user_id' => (int) $row->id,
                 'name' => $row->name,
                 'avatar' => $row->avatar,
+                'equipped_avatar_frame' => $user ? $this->userPresentationService->serializeFrame(
+                    $this->userPresentationService->equippedItem($user, 'avatar_frame')
+                ) : null,
+                'equipped_profile_title' => $user ? $this->userPresentationService->serializeTitle(
+                    $this->userPresentationService->equippedItem($user, 'profile_title')
+                ) : null,
+                'level_title' => $user?->level_title,
                 'total_xp' => (int) $row->total_xp,
                 'completed_activities' => (int) $row->completed_activities,
             ];

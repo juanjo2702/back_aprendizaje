@@ -5,27 +5,29 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class Purchase extends Model
+class UserCoupon extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'user_id',
         'shop_item_id',
-        'cost_coins',
-        'status',
+        'user_item_id',
+        'payment_id',
+        'code',
+        'discount_percent',
+        'is_used',
+        'used_at',
         'metadata',
-        'purchased_at',
-        'consumed_at',
     ];
 
     protected function casts(): array
     {
         return [
-            'cost_coins' => 'integer',
+            'discount_percent' => 'decimal:2',
+            'is_used' => 'boolean',
+            'used_at' => 'datetime',
             'metadata' => 'array',
-            'purchased_at' => 'datetime',
-            'consumed_at' => 'datetime',
         ];
     }
 
@@ -41,6 +43,11 @@ class Purchase extends Model
 
     public function userItem()
     {
-        return $this->hasOne(UserItem::class);
+        return $this->belongsTo(UserItem::class);
+    }
+
+    public function payment()
+    {
+        return $this->belongsTo(Payment::class);
     }
 }

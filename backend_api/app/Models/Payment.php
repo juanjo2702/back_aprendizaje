@@ -10,11 +10,16 @@ class Payment extends Model
         'user_id',
         'course_id',
         'amount',
+        'original_amount',
         'status',
         'payment_method',
         'provider',
         'qr_data',
         'transaction_id',
+        'coupon_code',
+        'coupon_discount_percent',
+        'coupon_discount_amount',
+        'user_coupon_id',
         'reviewed_by',
         'reviewed_at',
         'review_notes',
@@ -27,6 +32,9 @@ class Payment extends Model
     {
         return [
             'amount' => 'decimal:2',
+            'original_amount' => 'decimal:2',
+            'coupon_discount_percent' => 'decimal:2',
+            'coupon_discount_amount' => 'decimal:2',
             'platform_fee_amount' => 'decimal:2',
             'instructor_amount' => 'decimal:2',
             'reviewed_at' => 'datetime',
@@ -46,5 +54,10 @@ class Payment extends Model
     public function reviewer()
     {
         return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
+    public function userCoupon()
+    {
+        return $this->belongsTo(UserCoupon::class);
     }
 }

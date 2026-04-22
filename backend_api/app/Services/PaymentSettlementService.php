@@ -48,6 +48,22 @@ class PaymentSettlementService
                 'instructor_amount' => $payment->instructor_amount > 0 ? $payment->instructor_amount : $split['instructor_amount'],
             ])->save();
 
+            if ($payment->userCoupon && ! $payment->userCoupon->is_used) {
+                $payment->userCoupon->forceFill([
+                    'is_used' => true,
+                    'used_at' => now(),
+                    'payment_id' => $payment->id,
+                ])->save();
+            }
+
+            $userItem = $payment->userCoupon?->userItem;
+            if ($userItem) {
+                $userItem->forceFill([
+                    'is_used' => true,
+                    'used_at' => now(),
+                ])->save();
+            }
+
             Enrollment::query()->firstOrCreate(
                 [
                     'user_id' => $payment->user_id,
@@ -64,7 +80,7 @@ class PaymentSettlementService
                 'notes' => $notes,
             ]);
 
-            return $payment->fresh(['user:id,name,email', 'course:id,title,instructor_id', 'course.instructor:id,name,email']);
+            return $payment->fresh(['user:id,name,email', 'course:id,title,instructor_id', 'course.instructor:id,name,email', 'userCoupon']);
         });
     }
 

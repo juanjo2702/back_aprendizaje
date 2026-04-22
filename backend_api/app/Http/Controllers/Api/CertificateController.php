@@ -4,17 +4,21 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Certificate;
-use App\Models\CertificateTemplate;
 use App\Models\Course;
 use App\Models\User;
-use Barryvdh\DomPDF\Facade\Pdf;
+use App\Services\CertificateAutomationService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class CertificateController extends Controller
 {
+    public function __construct(
+        private readonly CertificateAutomationService $certificateAutomationService
+    ) {
+    }
+
     /**
      * Listar certificados del usuario autenticado.
      */
@@ -127,11 +131,7 @@ class CertificateController extends Controller
             }
         }
 
-        // Verificar si ya tiene certificado para este curso
-        $existingCertificate = Certificate::where('user_id', $user->id)
-            ->where('course_id', $course->id)
-            ->first();
-
+        $existingCertificate = Certificate::where('user_id', $user->id)->where('course_id', $course->id)->first();
         if ($existingCertificate) {
             return response()->json([
                 'message' => 'Ya tienes un certificado para este curso.',
@@ -139,55 +139,7 @@ class CertificateController extends Controller
             ]);
         }
 
-        DB::transaction(function () use ($user, $course, &$certificate) {
-            // Seleccionar plantilla (usar la predeterminada o una aleatoria)
-            $template = CertificateTemplate::where('is_default', true)->first();
-            if (! $template) {
-                $template = CertificateTemplate::inRandomOrder()->first();
-            }
-
-            // Generar código único
-            $certificateCode = 'CERT-'.strtoupper(uniqid()).'-'.$user->id.'-'.$course->id;
-
-            // Crear certificado
-            $certificate = Certificate::create([
-                'user_id' => $user->id,
-                'course_id' => $course->id,
-                'template_id' => $template->id,
-                'certificate_code' => $certificateCode,
-                'student_name' => $user->name,
-                'course_name' => $course->title,
-                'expiry_date' => $course->certificate_validity_days > 0
-                    ? Carbon::now()->addDays($course->certificate_validity_days)
-                    : null,
-                'metadata' => [
-                    'instructor' => $course->instructor->name,
-                    'completion_date' => Carbon::now()->format('Y-m-d'),
-                    'final_score' => $this->calculateCourseAverage($user, $course),
-                    'hours' => $course->total_duration_hours ?? 0,
-                ],
-                'issued_at' => Carbon::now(),
-            ]);
-
-            // Otorgar puntos por obtener certificado
-            $points = 200; // puntos por certificado
-            $user->total_points += $points;
-            $user->save();
-
-            DB::table('points_log')->insert([
-                'user_id' => $user->id,
-                'points' => $points,
-                'source' => 'certificate',
-                'source_id' => $certificate->id,
-                'description' => 'Puntos por obtener certificado: '.$course->title,
-                'created_at' => Carbon::now(),
-                'updated_at' => Carbon::now(),
-            ]);
-
-            // Verificar badge por certificado
-            $badgeService = new \App\Services\BadgeService;
-            $badgeService->checkGeneralBadges($user);
-        });
+        $certificate = $this->certificateAutomationService->issueIfEligible($user, $course, 100, 'manual_request');
 
         return response()->json([
             'message' => 'Certificado generado exitosamente.',
@@ -252,6 +204,13 @@ class CertificateController extends Controller
         ]);
     }
 
+    public function verifyByCode(string $certificateCode)
+    {
+        return $this->verify(new Request([
+            'certificate_code' => $certificateCode,
+        ]));
+    }
+
     /**
      * Descargar certificado como PDF.
      */
@@ -266,22 +225,14 @@ class CertificateController extends Controller
 
         $certificate->load(['course', 'template', 'user']);
 
-        // Generar PDF (simplificado - en producción usaríamos una vista Blade)
-        $data = [
-            'certificate' => $certificate,
-            'issue_date' => $certificate->issued_at->format('d/m/Y'),
-            'expiry_date' => $certificate->expiry_date ? $certificate->expiry_date->format('d/m/Y') : null,
-        ];
+        if (! $certificate->pdf_path || ! Storage::disk('public')->exists($certificate->pdf_path)) {
+            $certificate = $this->certificateAutomationService->persistPdf($certificate);
+        }
 
-        // Por ahora devolvemos JSON, en producción generaríamos PDF
-        // $pdf = PDF::loadView('certificates.template', $data);
-        // return $pdf->download("certificado-{$certificate->certificate_code}.pdf");
-
-        return response()->json([
-            'message' => 'Descarga de PDF simulada. En producción se generaría el PDF.',
-            'certificate' => $certificate,
-            'download_url' => '#', // URL simulada
-        ]);
+        return Storage::disk('public')->download(
+            $certificate->pdf_path,
+            "certificado-{$certificate->certificate_code}.pdf"
+        );
     }
 
     /**

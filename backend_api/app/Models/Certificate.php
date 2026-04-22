@@ -20,6 +20,9 @@ class Certificate extends Model
         'issued_at',
         'expiry_date',
         'download_url',
+        'pdf_path',
+        'verification_url',
+        'issued_via',
         'metadata',
     ];
 

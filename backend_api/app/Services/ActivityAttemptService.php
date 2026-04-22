@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\ActivityLog;
+use App\Models\ActivityAttempt;
 use App\Models\InteractiveActivityResult;
 use App\Models\InteractiveConfig;
 use App\Models\PointsLog;
@@ -74,6 +75,7 @@ class ActivityAttemptService
         $multiplier = $interactiveConfig->rewardMultiplierForAttempt($attemptNumber);
         $xpAwarded = $passed ? (int) round($interactiveConfig->xp_reward * $multiplier) : 0;
         $coinAwarded = $passed ? (int) round($interactiveConfig->coin_reward * $multiplier) : 0;
+        $xpPenalty = ! $passed ? (int) max(1, round($interactiveConfig->xp_reward * min(0.3, 0.1 * $attemptNumber))) : 0;
         $locked = ! $passed && $attemptNumber >= $maxAttempts;
         $logStatus = $passed ? 'passed' : ($locked ? 'locked' : 'failed');
 
@@ -90,6 +92,7 @@ class ActivityAttemptService
             $logStatus,
             $passed,
             $locked,
+            $xpPenalty,
             $payload
         ) {
             ActivityLog::create([
@@ -105,6 +108,26 @@ class ActivityAttemptService
                 'coin_awarded' => $coinAwarded,
                 'reward_multiplier' => $multiplier,
                 'status' => $logStatus,
+                'payload' => $payload ?: null,
+                'attempted_at' => now(),
+            ]);
+
+            ActivityAttempt::create([
+                'user_id' => $user->id,
+                'course_id' => $course->id,
+                'module_id' => $lesson->module_id,
+                'lesson_id' => $lesson->id,
+                'interactive_config_id' => $interactiveConfig->id,
+                'attempt_number' => $attemptNumber,
+                'score' => $normalizedScore,
+                'max_score' => 100,
+                'score_percentage' => $normalizedScore,
+                'passing_score' => (int) $interactiveConfig->passing_score,
+                'xp_awarded' => $xpAwarded,
+                'xp_penalty' => $xpPenalty,
+                'coin_awarded' => $coinAwarded,
+                'passed' => $passed,
+                'locked' => $locked,
                 'payload' => $payload ?: null,
                 'attempted_at' => now(),
             ]);
@@ -149,6 +172,21 @@ class ActivityAttemptService
                 ]);
 
                 $this->courseProgressService->markLessonCompleted($user, $lesson, (int) ($payload['time_spent_seconds'] ?? 0));
+            } elseif ($xpPenalty > 0) {
+                $penaltyApplied = min($xpPenalty, max(0, (int) $user->total_points));
+                if ($penaltyApplied > 0) {
+                    $user->decrement('total_points', $penaltyApplied);
+
+                    PointsLog::create([
+                        'user_id' => $user->id,
+                        'points' => -$penaltyApplied,
+                        'source' => 'interactive_attempt_penalty',
+                        'source_id' => $lesson->id,
+                        'description' => 'Penalización por intento fallido: '.$lesson->title,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
             }
 
             return $aggregate;
@@ -173,6 +211,7 @@ class ActivityAttemptService
                 'locked' => $locked,
                 'reward_multiplier' => $multiplier,
                 'xp_awarded' => $xpAwarded,
+                'xp_penalty' => $xpPenalty,
                 'coin_awarded' => $coinAwarded,
             ],
             'activity_result' => $result,

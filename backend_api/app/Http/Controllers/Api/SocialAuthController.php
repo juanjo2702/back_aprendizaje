@@ -55,13 +55,19 @@ class SocialAuthController extends Controller
             $user = User::where('email', $socialUser->getEmail())->first();
 
             if ($user) {
-                // Si el usuario existe pero no tiene el provider linkeado, lo actualizamos.
+                // Si el usuario existe pero no tiene el provider linkeado, o tiene rol nulo, lo actualizamos.
+                $updates = [];
                 if (! $user->provider_id) {
-                    $user->update([
-                        'provider_name' => $provider,
-                        'provider_id' => $socialUser->getId(),
-                        'provider_token' => $socialUser->token,
-                    ]);
+                    $updates['provider_name'] = $provider;
+                    $updates['provider_id'] = $socialUser->getId();
+                    $updates['provider_token'] = $socialUser->token;
+                }
+                if (! $user->role) {
+                    $updates['role'] = 'student';
+                }
+                
+                if (!empty($updates)) {
+                    $user->update($updates);
                 }
             } else {
                 // Si el usuario es nuevo, lo registramos.
@@ -69,6 +75,7 @@ class SocialAuthController extends Controller
                     'name' => $socialUser->getName() ?? $socialUser->getNickname(),
                     'email' => $socialUser->getEmail(),
                     'avatar' => $socialUser->getAvatar(),
+                    'role' => 'student',
                     'provider_name' => $provider,
                     'provider_id' => $socialUser->getId(),
                     'provider_token' => $socialUser->token,
@@ -81,7 +88,7 @@ class SocialAuthController extends Controller
 
             // Redirigir al frontend con token y datos de usuario seguros
             $frontendUrl = rtrim(env('FRONTEND_URL', 'http://localhost:9000'), '/');
-            $safeUser = $user->only([
+            $safeUser = $user->fresh()->only([
                 'id',
                 'name',
                 'email',

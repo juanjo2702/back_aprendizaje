@@ -109,6 +109,28 @@ class User extends Authenticatable
         return $this->hasMany(Purchase::class);
     }
 
+    public function userItems()
+    {
+        return $this->hasMany(UserItem::class);
+    }
+
+    public function equippedItems()
+    {
+        return $this->hasMany(UserItem::class)
+            ->where('is_equipped', true)
+            ->with('shopItem');
+    }
+
+    public function userCoupons()
+    {
+        return $this->hasMany(UserCoupon::class);
+    }
+
+    public function profile()
+    {
+        return $this->hasOne(UserProfile::class);
+    }
+
     public function payments()
     {
         return $this->hasMany(Payment::class);

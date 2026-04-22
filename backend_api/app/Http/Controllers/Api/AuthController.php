@@ -4,12 +4,18 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\UserPresentationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly UserPresentationService $userPresentationService
+    ) {
+    }
+
     /**
      * Register a new user.
      */
@@ -30,7 +36,7 @@ class AuthController extends Controller
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'user' => $user,
+            'user' => $this->userPresentationService->authPayload($user),
             'token' => $token,
         ], 201);
     }
@@ -58,7 +64,7 @@ class AuthController extends Controller
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'user' => $user,
+            'user' => $this->userPresentationService->authPayload($user),
             'token' => $token,
         ]);
     }
@@ -68,7 +74,9 @@ class AuthController extends Controller
      */
     public function profile(Request $request)
     {
-        return response()->json($request->user());
+        return response()->json(
+            $this->userPresentationService->authPayload($request->user())
+        );
     }
 
     /**
@@ -82,11 +90,20 @@ class AuthController extends Controller
             'name' => 'sometimes|string|max:255',
             'bio' => 'sometimes|nullable|string|max:1000',
             'avatar' => 'sometimes|nullable|string|max:500',
+            'headline' => 'sometimes|nullable|string|max:255',
+            'mini_bio' => 'sometimes|nullable|string|max:500',
+            'location' => 'sometimes|nullable|string|max:120',
         ]);
 
-        $user->update($validated);
+        $user->update(collect($validated)->only(['name', 'bio', 'avatar'])->all());
+        $user->profile()->updateOrCreate(
+            ['user_id' => $user->id],
+            collect($validated)->only(['headline', 'mini_bio', 'location'])->all()
+        );
 
-        return response()->json($user->fresh());
+        return response()->json(
+            $this->userPresentationService->authPayload($user->fresh())
+        );
     }
 
     /**
