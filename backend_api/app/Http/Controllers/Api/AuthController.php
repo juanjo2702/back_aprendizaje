@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\UserPresentationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -104,6 +105,48 @@ class AuthController extends Controller
         return response()->json(
             $this->userPresentationService->authPayload($user->fresh())
         );
+    }
+
+    public function updateAvatar(Request $request)
+    {
+        $validated = $request->validate([
+            'avatar' => 'required|image|mimes:jpg,jpeg,png,webp|max:5120',
+        ]);
+
+        $user = $request->user();
+        $path = $validated['avatar']->store('avatars', 'public');
+        $user->forceFill([
+            'avatar' => rtrim($request->getSchemeAndHttpHost(), '/').Storage::disk('public')->url($path),
+        ])->save();
+
+        return response()->json([
+            'message' => 'Foto de perfil actualizada correctamente.',
+            'user' => $this->userPresentationService->authPayload($user->fresh()),
+        ]);
+    }
+
+    public function updatePassword(Request $request)
+    {
+        $validated = $request->validate([
+            'current_password' => 'required|string',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = $request->user();
+
+        if (! Hash::check($validated['current_password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['La contraseña actual no es correcta.'],
+            ]);
+        }
+
+        $user->forceFill([
+            'password' => $validated['password'],
+        ])->save();
+
+        return response()->json([
+            'message' => 'Contraseña actualizada correctamente.',
+        ]);
     }
 
     /**

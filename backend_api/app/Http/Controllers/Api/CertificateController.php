@@ -10,6 +10,7 @@ use App\Services\CertificateAutomationService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class CertificateController extends Controller
@@ -168,6 +169,30 @@ class CertificateController extends Controller
         return response()->json($certificate);
     }
 
+    public function preview(Request $request, Certificate $certificate)
+    {
+        $user = Auth::user();
+
+        if ($certificate->user_id !== $user->id && ! $user->isAdmin() && ! $user->isInstructor()) {
+            abort(403, 'No tienes permiso para previsualizar este certificado.');
+        }
+
+        $certificate->load([
+            'course:id,title,slug,thumbnail,description,instructor_id',
+            'course.instructor:id,name,avatar',
+            'template:id,name,background_image,template_config',
+            'user:id,name,email',
+        ]);
+
+        return response(
+            $this->certificateAutomationService->renderPreviewHtml(
+                $certificate,
+                filter_var($request->boolean('print'), FILTER_VALIDATE_BOOL),
+                filter_var($request->boolean('embedded'), FILTER_VALIDATE_BOOL)
+            )
+        )->header('Content-Type', 'text/html; charset=UTF-8');
+    }
+
     /**
      * Verificar la validez de un certificado por código.
      */
@@ -224,10 +249,7 @@ class CertificateController extends Controller
         }
 
         $certificate->load(['course', 'template', 'user']);
-
-        if (! $certificate->pdf_path || ! Storage::disk('public')->exists($certificate->pdf_path)) {
-            $certificate = $this->certificateAutomationService->persistPdf($certificate);
-        }
+        $certificate = $this->certificateAutomationService->persistPdf($certificate);
 
         return Storage::disk('public')->download(
             $certificate->pdf_path,

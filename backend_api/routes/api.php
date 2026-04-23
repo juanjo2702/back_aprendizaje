@@ -78,6 +78,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // Auth
     Route::get('/profile', [AuthController::class, 'profile']);
     Route::put('/profile', [AuthController::class, 'updateProfile']);
+    Route::post('/profile/avatar', [AuthController::class, 'updateAvatar']);
+    Route::post('/profile/password', [AuthController::class, 'updatePassword']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     // Courses CRUD (teacher/admin)
@@ -149,15 +151,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/quizzes/{quiz}/attempt-history', [QuizController::class, 'attemptHistory'])->middleware('role:student');
     Route::get('/quizzes/user/stats', [QuizController::class, 'userStats'])->middleware('role:student');
 
-    // Badges (student profile/inventory)
-    Route::apiResource('badges', BadgeController::class)->only(['index', 'show']);
+    // Badges (student profile/inventory). Keep literal routes before /badges/{badge}.
     Route::get('/badges/my', [BadgeController::class, 'myBadges'])->middleware('role:student');
     Route::get('/badges/available', [BadgeController::class, 'availableBadges'])->middleware('role:student');
     Route::get('/badges/stats', [BadgeController::class, 'stats'])->middleware('role:student');
+    Route::apiResource('badges', BadgeController::class)->only(['index', 'show'])->whereNumber('badge');
 
     // Certificates (student)
     Route::apiResource('certificates', CertificateController::class)->only(['index', 'show']);
     Route::post('/certificates/course/{course}/generate', [CertificateController::class, 'generate'])->middleware('role:student');
+    Route::get('/certificates/{certificate}/preview', [CertificateController::class, 'preview'])->middleware('role:student');
     Route::get('/certificates/{certificate}/download', [CertificateController::class, 'download'])->middleware('role:student');
 
     // Lessons (student arena)

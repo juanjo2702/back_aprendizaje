@@ -365,7 +365,9 @@ class TeacherStudentController extends Controller
                     'message' => $comment->body,
                     'student_name' => $comment->user?->name,
                     'course_title' => $context['course_title'],
+                    'course_slug' => $context['course_slug'],
                     'lesson_title' => $context['lesson_title'],
+                    'lesson_id' => $context['lesson_id'],
                     'created_at' => $comment->created_at,
                     'reply_count' => $comment->replies->count(),
                 ];
@@ -451,7 +453,9 @@ class TeacherStudentController extends Controller
 
             return [
                 'course_title' => $commentable->course?->title,
+                'course_slug' => $commentable->course?->slug,
                 'lesson_title' => $commentable->lesson?->title,
+                'lesson_id' => $commentable->lesson?->id,
             ];
         }
 
@@ -462,13 +466,17 @@ class TeacherStudentController extends Controller
 
             return [
                 'course_title' => $lesson?->module?->course?->title,
+                'course_slug' => $lesson?->module?->course?->slug,
                 'lesson_title' => $lesson?->title,
+                'lesson_id' => $lesson?->id,
             ];
         }
 
         return [
             'course_title' => null,
+            'course_slug' => null,
             'lesson_title' => null,
+            'lesson_id' => null,
         ];
     }
 }

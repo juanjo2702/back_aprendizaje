@@ -113,24 +113,38 @@ class CourseProgressService
 
     public function getProgressSnapshot(User $user, Course $course, bool $persistEnrollment = false): array
     {
+        $contentLessonTypes = ['video', 'reading', 'resource', 'text'];
+
         $totalVideos = $course->lessons()
             ->where('type', 'video')
+            ->count();
+
+        $totalContentLessons = $course->lessons()
+            ->whereIn('type', $contentLessonTypes)
             ->count();
 
         $totalActivities = $course->lessons()
             ->whereIn('type', ['interactive', 'game', 'quiz'])
             ->count();
 
-        $totalEligibleUnits = $totalVideos + $totalActivities;
+        $totalEligibleUnits = $totalContentLessons + $totalActivities;
 
         $completedLessons = UserLessonProgress::where('user_id', $user->id)
+            ->where('course_id', $course->id)
+            ->where('is_completed', true)
+            ->whereHas('lesson', fn ($query) => $query->whereIn('type', $contentLessonTypes))
+            ->distinct('lesson_id')
+            ->count('lesson_id');
+
+        $completedVideos = UserLessonProgress::where('user_id', $user->id)
             ->where('course_id', $course->id)
             ->where('is_completed', true)
             ->whereHas('lesson', fn ($query) => $query->where('type', 'video'))
             ->distinct('lesson_id')
             ->count('lesson_id');
 
-        $videoProgress = $totalVideos > 0 ? round(($completedLessons / $totalVideos) * 100, 2) : 100.0;
+        $videoProgress = $totalVideos > 0 ? round(($completedVideos / $totalVideos) * 100, 2) : 100.0;
+        $contentProgress = $totalContentLessons > 0 ? round(($completedLessons / $totalContentLessons) * 100, 2) : 100.0;
         $completedInteractive = InteractiveActivityResult::where('user_id', $user->id)
             ->where('course_id', $course->id)
             ->where('status', 'completed')
@@ -164,14 +178,14 @@ class CourseProgressService
         return [
             'has_interactive_activities' => $totalActivities > 0,
             'videos' => [
-                'completed' => $completedLessons,
+                'completed' => $completedVideos,
                 'total' => $totalVideos,
                 'progress' => $videoProgress,
             ],
             'lessons' => [
                 'completed' => $completedLessons,
-                'total' => $totalVideos,
-                'progress' => $videoProgress,
+                'total' => $totalContentLessons,
+                'progress' => $contentProgress,
             ],
             'interactive' => [
                 'completed' => $completedInteractive,
@@ -180,7 +194,7 @@ class CourseProgressService
             ],
             'resources' => [
                 'total' => $course->lessons()->whereIn('type', ['resource', 'reading', 'text'])->count(),
-                'count_towards_progress' => false,
+                'count_towards_progress' => true,
             ],
             'overall_progress' => $overall,
         ];

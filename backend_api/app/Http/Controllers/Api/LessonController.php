@@ -82,6 +82,9 @@ class LessonController extends Controller
 
         [$previousLesson, $nextLesson] = $this->resolveAdjacentLessons($lesson, $course);
         $interactiveConfig = $this->resolveInteractiveConfig($lesson);
+        $interactiveAttemptState = $interactiveConfig
+            ? $this->resolveInteractiveAttemptState($lesson, $user)
+            : null;
         $commentTarget = $this->resolveCommentTarget($lesson);
 
         return response()->json([
@@ -144,6 +147,7 @@ class LessonController extends Controller
                     : [],
             ],
             'interactive_config' => $interactiveConfig,
+            'interactive_attempt_state' => $interactiveAttemptState,
             'comment_target' => $commentTarget,
             'premium_unlock' => $premiumItem ? [
                 'id' => $premiumItem->id,
@@ -214,9 +218,9 @@ class LessonController extends Controller
             'time_spent_seconds' => 'nullable|integer|min:0|max:86400',
         ]);
 
-        if ($lesson->type !== 'video') {
+        if (in_array($lesson->type, ['interactive', 'game', 'quiz'], true)) {
             return response()->json([
-                'message' => 'Solo las lecciones en video afectan el progreso del curso. Los documentos y recursos son de apoyo.',
+                'message' => 'Las actividades se completan desde su motor interactivo.',
                 'progress' => $progressService->recalculateEnrollmentProgress($user, $course),
             ], 422);
         }
@@ -225,7 +229,12 @@ class LessonController extends Controller
         $snapshot = $progressService->recalculateEnrollmentProgress($user, $course);
 
         return response()->json([
-            'message' => 'Video marcado como completado.',
+            'message' => match ($lesson->normalized_type) {
+                'video' => 'Video marcado como completado.',
+                'resource' => 'Recurso marcado como visto.',
+                'reading' => 'Lectura marcada como vista.',
+                default => 'Lección marcada como completada.',
+            },
             'progress' => $snapshot,
         ]);
     }
@@ -386,6 +395,52 @@ class LessonController extends Controller
         return [
             'type' => $lesson->contentable->getMorphClass(),
             'id' => $lesson->contentable->getKey(),
+        ];
+    }
+
+    private function resolveInteractiveAttemptState(Lesson $lesson, $user): ?array
+    {
+        $interactive = $lesson->interactiveConfig;
+
+        if (! $interactive && $lesson->contentable instanceof InteractiveConfig) {
+            $interactive = $lesson->contentable;
+        }
+
+        if (! $interactive) {
+            return null;
+        }
+
+        $logs = $interactive->activityLogs()
+            ->where('user_id', $user->id)
+            ->orderBy('attempt_number')
+            ->get();
+
+        $result = $interactive->activityResults()
+            ->where('user_id', $user->id)
+            ->where('source_type', 'interactive_renderer')
+            ->where('source_id', $interactive->id)
+            ->first();
+
+        $attemptsUsed = (int) max($logs->count(), $result?->attempts_used ?? 0);
+        $maxAttempts = max(1, (int) ($interactive->max_attempts ?: 3));
+
+        return [
+            'attempts_used' => $attemptsUsed,
+            'max_attempts' => $maxAttempts,
+            'remaining_attempts' => max(0, $maxAttempts - $attemptsUsed),
+            'status' => $result?->status ?? ($attemptsUsed > 0 ? 'started' : 'pending'),
+            'passed' => $result?->status === 'completed',
+            'locked' => (bool) ($result?->is_locked ?? false),
+            'requires_teacher_reset' => (bool) ($result?->requires_teacher_reset ?? false),
+            'score' => $result?->score,
+            'passing_score' => (int) $interactive->passing_score,
+            'last_attempt' => $logs->last() ? [
+                'attempt_number' => $logs->last()->attempt_number,
+                'score' => $logs->last()->score,
+                'status' => $logs->last()->status,
+                'xp_awarded' => $logs->last()->xp_awarded,
+                'coin_awarded' => $logs->last()->coin_awarded,
+            ] : null,
         ];
     }
 

@@ -68,6 +68,8 @@ class LessonVideo extends Model implements HasMedia
             false
         );
 
-        return rtrim(config('app.url') ?: url('/'), '/').$signedPath;
+        $publicHost = request()?->getSchemeAndHttpHost() ?: (config('app.url') ?: url('/'));
+
+        return rtrim($publicHost, '/').$signedPath;
     }
 }

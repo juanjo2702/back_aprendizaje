@@ -22,6 +22,7 @@ class DatabaseSeeder extends Seeder
             LmsCatalogSeeder::class,
             ShopItemSeeder::class,
             StudentSeeder::class,
+            DemoScenarioSeeder::class,
         ]);
     }
 
@@ -29,16 +30,23 @@ class DatabaseSeeder extends Seeder
     {
         $tables = [
             'interactive_activity_results',
+            'activity_attempts',
             'user_lesson_progress',
             'user_quiz_attempts',
             'game_sessions',
             'points_log',
             'comments',
+            'user_coupons',
+            'user_items',
+            'user_profiles',
             'purchases',
             'shop_items',
             'user_badges',
             'certificates',
             'payments',
+            'payouts',
+            'admin_activity_logs',
+            'platform_settings',
             'enrollments',
             'questions',
             'quizzes',
