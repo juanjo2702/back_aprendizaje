@@ -47,6 +47,8 @@ class BadgeController extends Controller
     public function myBadges(Request $request)
     {
         $user = Auth::user();
+        $this->badgeService->checkGeneralBadges($user);
+        $user = $user->fresh();
 
         $badges = $this->badgeService->getUserBadges($user);
 
@@ -71,6 +73,8 @@ class BadgeController extends Controller
     public function availableBadges(Request $request)
     {
         $user = Auth::user();
+        $this->badgeService->checkGeneralBadges($user);
+        $user = $user->fresh();
 
         $badges = $this->badgeService->getAvailableBadges($user);
 
@@ -93,6 +97,8 @@ class BadgeController extends Controller
     public function show(Badge $badge)
     {
         $user = Auth::user();
+        $this->badgeService->checkGeneralBadges($user);
+        $user = $user->fresh();
 
         // Verificar si el usuario tiene este badge
         $hasBadge = $this->badgeService->userHasBadge($user, $badge);
@@ -123,6 +129,8 @@ class BadgeController extends Controller
     public function stats(Request $request)
     {
         $user = Auth::user();
+        $this->badgeService->checkGeneralBadges($user);
+        $user = $user->fresh();
 
         $totalBadges = \DB::table('user_badges')->where('user_id', $user->id)->count();
 

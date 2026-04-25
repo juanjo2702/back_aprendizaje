@@ -14,7 +14,8 @@ class CourseProgressService
 {
     public function __construct(
         private readonly UserPresentationService $userPresentationService,
-        private readonly CertificateAutomationService $certificateAutomationService
+        private readonly CertificateAutomationService $certificateAutomationService,
+        private readonly BadgeService $badgeService
     ) {
     }
 
@@ -173,6 +174,8 @@ class CourseProgressService
             if ($overall >= 100) {
                 $this->certificateAutomationService->issueIfEligible($user, $course, $overall);
             }
+
+            $this->badgeService->checkGeneralBadges($user->fresh());
         }
 
         return [
@@ -238,6 +241,9 @@ class CourseProgressService
                 'equipped_profile_title' => $user ? $this->userPresentationService->serializeTitle(
                     $this->userPresentationService->equippedItem($user, 'profile_title')
                 ) : null,
+                'equipped_profile_titles' => $user ? $this->userPresentationService->serializeTitles(
+                    $this->userPresentationService->equippedItems($user, 'profile_title', 3)
+                ) : [],
                 'level_title' => $user?->level_title,
                 'total_xp' => (int) $row->total_xp,
                 'completed_activities' => (int) $row->completed_activities,

@@ -12,6 +12,7 @@ use App\Models\Purchase;
 use App\Models\User;
 use App\Models\UserLessonProgress;
 use App\Models\UserQuizAttempt;
+use App\Services\BadgeService;
 use App\Services\CourseProgressService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -19,12 +20,19 @@ use Illuminate\Support\Facades\DB;
 
 class UserProgressController extends Controller
 {
+    public function __construct(
+        private readonly BadgeService $badgeService
+    ) {
+    }
+
     /**
      * Obtener estadísticas generales del usuario para el dashboard.
      */
     public function dashboardStats(Request $request)
     {
         $user = Auth::user();
+        $this->badgeService->checkGeneralBadges($user);
+        $user = $user->fresh();
 
         // Cursos del usuario
         $enrollments = $user->enrollments()->with(['course.instructor:id,name', 'course.category:id,name,slug'])->get();
@@ -80,6 +88,10 @@ class UserProgressController extends Controller
                 'earned_coins' => $user->earned_coins,
                 'spent_coins' => $user->spent_coins,
                 'available_coins' => $user->available_coins,
+                'completed_courses' => $completedCourses,
+                'in_progress_courses' => $inProgressCourses,
+                'total_badges' => $totalBadges,
+                'total_certificates' => $totalCertificates,
                 'points_this_month' => 0, // TODO: implementar con PointsLog
             ],
             'courses' => [

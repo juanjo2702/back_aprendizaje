@@ -184,6 +184,7 @@ class CommentController extends Controller
                         'level_title' => null,
                         'equipped_avatar_frame' => null,
                         'equipped_profile_title' => null,
+                        'equipped_profile_titles' => [],
                     ]),
             ],
             'replies' => $comment->relationLoaded('replies')

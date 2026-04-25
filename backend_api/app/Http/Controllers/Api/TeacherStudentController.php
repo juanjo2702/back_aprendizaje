@@ -188,7 +188,23 @@ class TeacherStudentController extends Controller
             ->withCount('replies')
             ->latest()
             ->limit(10)
-            ->get(['id', 'body', 'created_at', 'resolved_at']);
+            ->get(['id', 'body', 'created_at', 'resolved_at'])
+            ->map(function (Comment $comment) {
+                $context = $this->resolveCommentContext($comment);
+
+                return [
+                    'id' => $comment->id,
+                    'body' => $comment->body,
+                    'created_at' => $comment->created_at,
+                    'resolved_at' => $comment->resolved_at,
+                    'reply_count' => $comment->replies_count,
+                    'course_title' => $context['course_title'],
+                    'course_slug' => $context['course_slug'],
+                    'lesson_title' => $context['lesson_title'],
+                    'lesson_id' => $context['lesson_id'],
+                ];
+            })
+            ->values();
 
         return response()->json([
             'student' => [

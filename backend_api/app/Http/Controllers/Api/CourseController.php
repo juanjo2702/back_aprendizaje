@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Services\CourseWorkflowService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class CourseController extends Controller
@@ -292,6 +293,7 @@ class CourseController extends Controller
             'short_description' => 'nullable|string|max:300',
             'price' => 'required|numeric|min:0',
             'thumbnail' => 'nullable|string|max:1000',
+            'thumbnail_file' => 'nullable|file|image|mimes:jpg,jpeg,png,webp|max:5120',
             'promo_video' => 'nullable|string|max:1000',
             'category_id' => 'nullable|exists:categories,id',
             'level' => 'required|in:beginner,intermediate,advanced,all_levels',
@@ -314,6 +316,8 @@ class CourseController extends Controller
         $validated['certificate_requires_final_exam'] = (bool) ($validated['certificate_requires_final_exam'] ?? false);
         $validated['certificate_exam_scope'] = $validated['certificate_exam_scope'] ?? 'lesson';
         $validated['certificate_final_lesson_id'] = null;
+        $validated['thumbnail'] = $this->resolveThumbnailValue($request, $validated['thumbnail'] ?? null);
+        unset($validated['thumbnail_file']);
 
         $course = Course::create($validated);
 
@@ -333,6 +337,7 @@ class CourseController extends Controller
             'short_description' => 'nullable|string|max:300',
             'price' => 'sometimes|numeric|min:0',
             'thumbnail' => 'nullable|string|max:1000',
+            'thumbnail_file' => 'nullable|file|image|mimes:jpg,jpeg,png,webp|max:5120',
             'promo_video' => 'nullable|string|max:1000',
             'category_id' => 'nullable|exists:categories,id',
             'level' => 'sometimes|in:beginner,intermediate,advanced,all_levels',
@@ -369,6 +374,16 @@ class CourseController extends Controller
             $validated['certificate_final_lesson_id'] = null;
             $validated['certificate_exam_scope'] = 'lesson';
         }
+
+        if ($request->hasFile('thumbnail_file') || array_key_exists('thumbnail', $validated)) {
+            $validated['thumbnail'] = $this->resolveThumbnailValue(
+                $request,
+                $validated['thumbnail'] ?? $course->thumbnail,
+                $course->thumbnail
+            );
+        }
+
+        unset($validated['thumbnail_file']);
 
         $course->update($validated);
 
@@ -411,6 +426,59 @@ class CourseController extends Controller
 
         if ($lesson->normalized_type !== 'interactive') {
             abort(422, 'La evaluación final debe ser una lección de tipo actividad.');
+        }
+    }
+
+    private function resolveThumbnailValue(Request $request, ?string $thumbnail, ?string $currentThumbnail = null): ?string
+    {
+        if ($request->hasFile('thumbnail_file')) {
+            $path = $request->file('thumbnail_file')->store('course-thumbnails', 'public');
+            $this->deleteLocalThumbnail($currentThumbnail);
+
+            return $this->publicStorageUrl($request, $path);
+        }
+
+        $normalizedThumbnail = is_string($thumbnail) ? trim($thumbnail) : null;
+
+        if ($normalizedThumbnail === '') {
+            $this->deleteLocalThumbnail($currentThumbnail);
+
+            return null;
+        }
+
+        return $normalizedThumbnail;
+    }
+
+    private function publicStorageUrl(Request $request, string $path): string
+    {
+        $relativeUrl = Storage::disk('public')->url($path);
+
+        if (Str::startsWith($relativeUrl, ['http://', 'https://'])) {
+            return $relativeUrl;
+        }
+
+        $baseUrl = rtrim(config('app.url') ?: $request->getSchemeAndHttpHost(), '/');
+
+        return $baseUrl.'/'.ltrim($relativeUrl, '/');
+    }
+
+    private function deleteLocalThumbnail(?string $thumbnail): void
+    {
+        if (! $thumbnail) {
+            return;
+        }
+
+        $parsedPath = parse_url($thumbnail, PHP_URL_PATH);
+        $storagePath = $parsedPath ?: $thumbnail;
+
+        if (! Str::contains($storagePath, '/storage/course-thumbnails/')) {
+            return;
+        }
+
+        $relativePath = Str::after($storagePath, '/storage/');
+
+        if ($relativePath !== '') {
+            Storage::disk('public')->delete($relativePath);
         }
     }
 }

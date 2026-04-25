@@ -7,24 +7,31 @@ use App\Models\User;
 use App\Models\UserCoupon;
 use App\Models\UserItem;
 use App\Models\UserProfile;
+use App\Services\BadgeService;
 use App\Services\UserPresentationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class StudentInventoryController extends Controller
 {
     public function __construct(
-        private readonly UserPresentationService $userPresentationService
+        private readonly UserPresentationService $userPresentationService,
+        private readonly BadgeService $badgeService
     ) {
     }
 
     public function index(Request $request)
     {
-        $user = $request->user()->load([
+        $this->badgeService->checkGeneralBadges($request->user());
+
+        $user = $request->user()->fresh()->load([
             'userItems.shopItem',
             'userCoupons.shopItem',
             'userCoupons.userItem',
             'equippedItems.shopItem',
+            'profile.equippedAvatarFrameItem.shopItem',
+            'profile.equippedProfileTitleItem.shopItem',
         ]);
 
         $frames = $user->userItems
@@ -59,6 +66,9 @@ class StudentInventoryController extends Controller
                 ),
                 'title' => $this->userPresentationService->serializeTitle(
                     $this->userPresentationService->equippedItem($user, 'profile_title')
+                ),
+                'titles' => $this->userPresentationService->serializeTitles(
+                    $this->userPresentationService->equippedItems($user, 'profile_title', 3)
                 ),
             ],
             'mini_profile' => $this->userPresentationService->miniProfile($user),
@@ -95,13 +105,28 @@ class StudentInventoryController extends Controller
             : ! $item->is_equipped;
 
         DB::transaction(function () use ($item, $user, $shouldEquip) {
-            if ($shouldEquip) {
+            if ($item->item_type === 'avatar_frame' && $shouldEquip) {
                 UserItem::query()
                     ->where('user_id', $user->id)
                     ->where('item_type', $item->item_type)
                     ->where('id', '!=', $item->id)
                     ->where('is_equipped', true)
                     ->update(['is_equipped' => false]);
+            }
+
+            if ($item->item_type === 'profile_title' && $shouldEquip) {
+                $equippedTitlesCount = UserItem::query()
+                    ->where('user_id', $user->id)
+                    ->where('item_type', 'profile_title')
+                    ->where('id', '!=', $item->id)
+                    ->where('is_equipped', true)
+                    ->count();
+
+                if ($equippedTitlesCount >= 3) {
+                    throw ValidationException::withMessages([
+                        'user_item_id' => 'Puedes mostrar hasta 3 títulos al mismo tiempo. Quita uno antes de equipar otro.',
+                    ]);
+                }
             }
 
             $item->forceFill(['is_equipped' => $shouldEquip])->save();
@@ -111,7 +136,14 @@ class StudentInventoryController extends Controller
                 $profile->equipped_avatar_frame_item_id = $shouldEquip ? $item->id : null;
             }
             if ($item->item_type === 'profile_title') {
-                $profile->equipped_profile_title_item_id = $shouldEquip ? $item->id : null;
+                $primaryEquippedTitleId = UserItem::query()
+                    ->where('user_id', $user->id)
+                    ->where('item_type', 'profile_title')
+                    ->where('is_equipped', true)
+                    ->orderByDesc('updated_at')
+                    ->value('id');
+
+                $profile->equipped_profile_title_item_id = $primaryEquippedTitleId;
             }
             $profile->save();
         });
@@ -132,6 +164,9 @@ class StudentInventoryController extends Controller
                 ),
                 'title' => $this->userPresentationService->serializeTitle(
                     $this->userPresentationService->equippedItem($freshUser, 'profile_title')
+                ),
+                'titles' => $this->userPresentationService->serializeTitles(
+                    $this->userPresentationService->equippedItems($freshUser, 'profile_title', 3)
                 ),
             ],
             'auth_user' => $this->userPresentationService->authPayload($freshUser),

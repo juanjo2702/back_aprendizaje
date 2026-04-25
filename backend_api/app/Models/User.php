@@ -203,4 +203,32 @@ class User extends Authenticatable
 
         return $currentRow['title'] ?? 'Aprendiz';
     }
+
+    public function getAvatarAttribute($value): ?string
+    {
+        if (! $value) {
+            return null;
+        }
+
+        $avatar = trim((string) $value);
+        $publicAppUrl = rtrim((string) config('app.url'), '/');
+
+        if (preg_match('#^(https?://[^/]+)(https?://[^/]+)(/.*)$#i', $avatar, $matches)) {
+            $avatar = $matches[2].$matches[3];
+        }
+
+        if (preg_match('#^https?://backend(?::\d+)?(/.*)$#i', $avatar, $matches)) {
+            return $publicAppUrl.$matches[1];
+        }
+
+        if (str_starts_with($avatar, '/storage/')) {
+            return $publicAppUrl.$avatar;
+        }
+
+        if (str_starts_with($avatar, 'storage/')) {
+            return $publicAppUrl.'/'.$avatar;
+        }
+
+        return $avatar;
+    }
 }

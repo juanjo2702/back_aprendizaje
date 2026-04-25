@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Badge;
 use App\Models\User;
 use App\Models\UserItem;
+use Illuminate\Support\Collection;
 
 class UserPresentationService
 {
@@ -35,6 +36,7 @@ class UserPresentationService
             'location' => $user->profile?->location,
             'equipped_avatar_frame' => $this->serializeFrame($this->equippedItem($user, 'avatar_frame')),
             'equipped_profile_title' => $this->serializeTitle($this->equippedItem($user, 'profile_title')),
+            'equipped_profile_titles' => $this->serializeTitles($this->equippedItems($user, 'profile_title', 3)),
         ]);
     }
 
@@ -49,6 +51,7 @@ class UserPresentationService
             'level_title' => $user->level_title,
             'equipped_avatar_frame' => $this->serializeFrame($this->equippedItem($user, 'avatar_frame')),
             'equipped_profile_title' => $this->serializeTitle($this->equippedItem($user, 'profile_title')),
+            'equipped_profile_titles' => $this->serializeTitles($this->equippedItems($user, 'profile_title', 3)),
         ];
     }
 
@@ -74,6 +77,7 @@ class UserPresentationService
             'location' => $user->profile?->location,
             'equipped_avatar_frame' => $this->serializeFrame($this->equippedItem($user, 'avatar_frame')),
             'equipped_profile_title' => $this->serializeTitle($this->equippedItem($user, 'profile_title')),
+            'equipped_profile_titles' => $this->serializeTitles($this->equippedItems($user, 'profile_title', 3)),
             'top_badges' => $user->badges->map(fn (Badge $badge) => [
                 'id' => $badge->id,
                 'name' => $badge->name,
@@ -85,6 +89,11 @@ class UserPresentationService
 
     public function equippedItem(User $user, string $type): ?UserItem
     {
+        return $this->equippedItems($user, $type, 1)->first();
+    }
+
+    public function equippedItems(User $user, string $type, ?int $limit = null): Collection
+    {
         if ($user->relationLoaded('profile') && $user->profile) {
             $item = match ($type) {
                 'avatar_frame' => $user->profile->equippedAvatarFrameItem,
@@ -93,15 +102,42 @@ class UserPresentationService
             };
 
             if ($item) {
-                return $item;
+                if ($type === 'profile_title') {
+                    $items = $user->relationLoaded('equippedItems')
+                        ? $user->equippedItems
+                            ->where('item_type', $type)
+                            ->sortByDesc('updated_at')
+                            ->values()
+                        : $user->equippedItems()
+                            ->where('item_type', $type)
+                            ->with('shopItem')
+                            ->orderByDesc('updated_at')
+                            ->get();
+
+                    $items = $items->prepend($item)->unique('id')->values();
+
+                    return $limit ? $items->take($limit)->values() : $items;
+                }
+
+                return collect([$item]);
             }
         }
 
         if ($user->relationLoaded('equippedItems')) {
-            return $user->equippedItems->firstWhere('item_type', $type);
+            $items = $user->equippedItems
+                ->where('item_type', $type)
+                ->sortByDesc('updated_at')
+                ->values();
+
+            return $limit ? $items->take($limit)->values() : $items;
         }
 
-        return $user->equippedItems()->where('item_type', $type)->with('shopItem')->first();
+        $query = $user->equippedItems()
+            ->where('item_type', $type)
+            ->with('shopItem')
+            ->orderByDesc('updated_at');
+
+        return $limit ? $query->limit($limit)->get() : $query->get();
     }
 
     public function serializeInventoryItem(UserItem $item): array
@@ -159,5 +195,14 @@ class UserPresentationService
             'label' => $metadata['title'] ?? $item->shopItem?->name,
             'color' => $metadata['title_color'] ?? null,
         ];
+    }
+
+    public function serializeTitles(iterable $items): array
+    {
+        return collect($items)
+            ->map(fn (UserItem $item) => $this->serializeTitle($item))
+            ->filter()
+            ->values()
+            ->all();
     }
 }
