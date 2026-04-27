@@ -9,6 +9,7 @@ use App\Models\Lesson;
 use App\Models\User;
 use App\Models\UserLessonProgress;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class CourseProgressService
 {
@@ -172,7 +173,16 @@ class CourseProgressService
             );
 
             if ($overall >= 100) {
-                $this->certificateAutomationService->issueIfEligible($user, $course, $overall);
+                try {
+                    $this->certificateAutomationService->issueIfEligible($user, $course, $overall);
+                } catch (\Throwable $exception) {
+                    Log::error('No se pudo emitir el certificado al recalcular progreso.', [
+                        'user_id' => $user->id,
+                        'course_id' => $course->id,
+                        'progress_percentage' => $overall,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
             }
 
             $this->badgeService->checkGeneralBadges($user->fresh());

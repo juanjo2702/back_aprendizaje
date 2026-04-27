@@ -11,6 +11,7 @@ use App\Services\ActivityAttemptService;
 use App\Services\CourseProgressService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class LessonController extends Controller
 {
@@ -22,6 +23,7 @@ class LessonController extends Controller
     {
         $user = Auth::user();
         $previewMode = request()->boolean('preview');
+        $progressPercentage = 0.0;
 
         $lesson = Lesson::with([
             'contentable',
@@ -74,6 +76,7 @@ class LessonController extends Controller
             $course,
             ! $previewMode || $isEnrolled
         );
+        $progressPercentage = (float) ($progressSnapshot['overall_progress'] ?? 0);
         $completedLessons = $user->lessonProgress()
             ->where('course_id', $course->id)
             ->where('is_completed', true)
@@ -109,6 +112,7 @@ class LessonController extends Controller
                 'status' => $course->status,
                 'has_interactive_activities' => $progressSnapshot['has_interactive_activities'],
                 'progress' => $progressSnapshot,
+                'progress_percentage' => $progressPercentage,
                 'is_preview' => $previewMode,
             ],
             'sidebar' => [
@@ -349,6 +353,7 @@ class LessonController extends Controller
                     'embed_url' => $contentable?->embed_url,
                     'provider' => $contentable?->provider,
                     'duration_seconds' => $contentable?->duration_seconds ?? $lesson->duration,
+                    'tracking_mode' => $this->resolveVideoTrackingMode($contentable?->provider, $contentable?->embed_url, $contentable?->video_url ?? $lesson->content_url),
                 ],
             ],
             'reading' => [
@@ -465,5 +470,25 @@ class LessonController extends Controller
             $previous ? ['id' => $previous->id, 'title' => $previous->title] : null,
             $next ? ['id' => $next->id, 'title' => $next->title] : null,
         ];
+    }
+
+    private function resolveVideoTrackingMode(?string $provider, ?string $embedUrl, ?string $videoUrl): string
+    {
+        $providerKey = strtolower(trim((string) $provider));
+        $target = strtolower(trim((string) ($embedUrl ?: $videoUrl)));
+
+        if ($providerKey === 'local' || ($providerKey === '' && $embedUrl === null)) {
+            return 'native';
+        }
+
+        if ($providerKey === 'youtube' || str_contains($target, 'youtube.com') || str_contains($target, 'youtu.be')) {
+            return 'youtube';
+        }
+
+        if ($providerKey === 'vimeo' || str_contains($target, 'vimeo.com')) {
+            return 'vimeo';
+        }
+
+        return 'manual';
     }
 }

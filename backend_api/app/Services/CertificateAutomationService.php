@@ -8,6 +8,7 @@ use App\Models\Course;
 use App\Models\InteractiveActivityResult;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\Facades\Storage;
 use SimpleSoftwareIO\QrCode\Facades\QrCode;
@@ -73,7 +74,7 @@ class CertificateAutomationService
             return null;
         }
 
-        return DB::transaction(function () use ($user, $course, $qualification, $issuedVia) {
+        $certificate = DB::transaction(function () use ($user, $course, $qualification, $issuedVia, $progressPercentage) {
             $template = CertificateTemplate::query()
                 ->where('is_default', true)
                 ->first()
@@ -101,10 +102,23 @@ class CertificateAutomationService
                 'issued_via' => $issuedVia,
             ]);
 
-            $this->persistPdf($certificate->fresh(['user', 'course', 'template']));
-
             return $certificate->fresh(['course', 'template']);
         });
+
+        try {
+            return $this->persistPdf($certificate->fresh(['user', 'course', 'template']));
+        } catch (\Throwable $exception) {
+            Log::error('No se pudo generar el PDF del certificado, pero la emisión quedó registrada.', [
+                'certificate_id' => $certificate->id,
+                'user_id' => $user->id,
+                'course_id' => $course->id,
+                'progress_percentage' => $progressPercentage,
+                'issued_via' => $issuedVia,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return $certificate->fresh(['course', 'template']);
+        }
     }
 
     public function persistPdf(Certificate $certificate): Certificate
