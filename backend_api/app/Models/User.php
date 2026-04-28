@@ -211,13 +211,13 @@ class User extends Authenticatable
         }
 
         $avatar = trim((string) $value);
-        $publicAppUrl = rtrim((string) config('app.url'), '/');
+        $publicAppUrl = $this->resolvePublicAppUrl();
 
         if (preg_match('#^(https?://[^/]+)(https?://[^/]+)(/.*)$#i', $avatar, $matches)) {
             $avatar = $matches[2].$matches[3];
         }
 
-        if (preg_match('#^https?://backend(?::\d+)?(/.*)$#i', $avatar, $matches)) {
+        if (preg_match('#^https?://[^/]+(/storage/.*)$#i', $avatar, $matches)) {
             return $publicAppUrl.$matches[1];
         }
 
@@ -230,5 +230,20 @@ class User extends Authenticatable
         }
 
         return $avatar;
+    }
+
+    private function resolvePublicAppUrl(): string
+    {
+        try {
+            $request = request();
+
+            if ($request && $request->getSchemeAndHttpHost()) {
+                return rtrim($request->getSchemeAndHttpHost(), '/');
+            }
+        } catch (\Throwable) {
+            // Fallback to APP_URL when no HTTP request is available.
+        }
+
+        return rtrim((string) config('app.url'), '/');
     }
 }

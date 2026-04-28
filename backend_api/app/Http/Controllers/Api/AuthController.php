@@ -115,14 +115,10 @@ class AuthController extends Controller
 
         $user = $request->user();
         $path = $validated['avatar']->store('avatars', 'public');
-        $publicUrl = Storage::disk('public')->url($path);
-
-        if (! preg_match('/^https?:\/\//i', $publicUrl)) {
-            $publicUrl = rtrim(config('app.url') ?: $request->getSchemeAndHttpHost(), '/').'/'.ltrim($publicUrl, '/');
-        }
+        $publicPath = Storage::disk('public')->url($path);
 
         $user->forceFill([
-            'avatar' => $publicUrl,
+            'avatar' => $publicPath,
         ])->save();
 
         return response()->json([
