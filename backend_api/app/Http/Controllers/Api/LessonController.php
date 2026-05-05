@@ -39,12 +39,13 @@ class LessonController extends Controller
         $course = $lesson->module->course;
         $isEnrolled = $course->enrollments()->where('user_id', $user->id)->exists();
         $isOwnerOrAdmin = $user->isAdmin() || ($user->isInstructor() && (int) $course->instructor_id === (int) $user->id);
+        $isFreeAccess = (bool) $lesson->is_free;
         $premiumItem = $lesson->shopItems()
             ->where('type', 'premium_content')
             ->where('is_active', true)
             ->first();
 
-        if (! $isEnrolled && ! $isOwnerOrAdmin) {
+        if (! $isEnrolled && ! $isOwnerOrAdmin && ! $isFreeAccess) {
             return response()->json(['message' => 'No tienes acceso a esta lección.'], 403);
         }
 
@@ -52,7 +53,7 @@ class LessonController extends Controller
             return response()->json(['message' => 'Solo el docente dueño puede usar la vista previa.'], 403);
         }
 
-        if ($premiumItem && ! $isOwnerOrAdmin) {
+        if ($premiumItem && ! $isOwnerOrAdmin && ! $isFreeAccess) {
             $hasUnlock = Purchase::query()
                 ->where('user_id', $user->id)
                 ->where('shop_item_id', $premiumItem->id)
@@ -71,10 +72,12 @@ class LessonController extends Controller
             }
         }
 
+        $shouldTrackProgress = $isEnrolled && ! $previewMode;
+
         $progressSnapshot = $progressService->getProgressSnapshot(
             $user,
             $course,
-            ! $previewMode || $isEnrolled
+            $shouldTrackProgress
         );
         $progressPercentage = (float) ($progressSnapshot['overall_progress'] ?? 0);
         $completedLessons = $user->lessonProgress()
@@ -477,16 +480,16 @@ class LessonController extends Controller
         $providerKey = strtolower(trim((string) $provider));
         $target = strtolower(trim((string) ($embedUrl ?: $videoUrl)));
 
-        if ($providerKey === 'local' || ($providerKey === '' && $embedUrl === null)) {
-            return 'native';
-        }
-
         if ($providerKey === 'youtube' || str_contains($target, 'youtube.com') || str_contains($target, 'youtu.be')) {
             return 'youtube';
         }
 
         if ($providerKey === 'vimeo' || str_contains($target, 'vimeo.com')) {
             return 'vimeo';
+        }
+
+        if ($providerKey === 'local' || ($providerKey === '' && $embedUrl === null)) {
+            return 'native';
         }
 
         return 'manual';
